@@ -18,6 +18,8 @@ python3 -m venv .venv
 .venv/bin/python -m pip install .
 ```
 
+If GitHub is slow from the server, [transfer a source archive over SSH](docs/hr650x-guide.md#国内服务器安装) (Chinese).
+
 ## Usage
 
 On the server, read once or keep sampling; local BMC permissions are required:
@@ -41,5 +43,9 @@ Add `--json` for JSON output or `--no-log` to disable file logging. Logs are sav
 ## Documentation
 
 [HR650X guide — Chinese](docs/hr650x-guide.md) · [Default configuration](config/default.yaml) · [Source](src/hrx_fancontrol/)
+
+## CI
+
+[Linux CI](.github/workflows/ci.yml) runs on pull requests targeting `main` and pushes to `main`, including merges. It checks package installation, unit tests, and offline CLI replay on Ubuntu 24.04 with Python 3.9 and 3.12.
 
 [MIT License](LICENSE) · Copyright © 2026 小洋

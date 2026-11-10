@@ -2,7 +2,32 @@
 
 [返回首页](../README.zh-CN.md)
 
-当前版本只读采集并模拟档位。安装与基本运行见首页，以下命令均在项目根目录执行。
+当前版本只读采集并模拟档位。安装与基本运行见首页；配置和运行命令从项目根目录执行。
+
+## 国内服务器安装
+
+在 Mac 的 `dev` 分支项目目录中打包，替换下面的 SSH 登录地址：
+
+```sh
+mkdir -p dist
+git archive --format=tar.gz --prefix=HRX-FanControl/ -o dist/hrx-fancontrol-source.tar.gz HEAD
+scp dist/hrx-fancontrol-source.tar.gz user@SERVER_IP:~/
+```
+
+压缩包只包含已提交的文件，不包含 Mac 的 `.venv`。服务器首次安装时，在 SSH 窗口执行：
+
+```sh
+sudo apt update
+sudo apt install -y ipmitool python3-venv
+tar -xzf ~/hrx-fancontrol-source.tar.gz -C ~
+cd ~/HRX-FanControl
+python3 -m venv .venv
+.venv/bin/python -m pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple --upgrade pip
+.venv/bin/python -m pip install -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple .
+sudo .venv/bin/hrx-fancontrol --once
+```
+
+服务器无需连接 GitHub；apt 和 Python 依赖仍需联网。这里的 pip 命令临时使用[清华镜像](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)，不会更改全局配置。持续运行时去掉 `--once`。
 
 ## 五档与回差
 
