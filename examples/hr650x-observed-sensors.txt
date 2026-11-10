@@ -1,0 +1,163 @@
+Inlet_Temp       | 26.000     | degrees C  | ok    | na        | na        | 7.000     | 42.000    | 45.000    | 46.000
+Outlet_Temp      | 44.000     | degrees C  | ok    | na        | na        | na        | 70.000    | 85.000    | 100.000
+CPU1_Temp        | 43.000     | degrees C  | ok    | na        | na        | na        | 86.000    | 93.000    | 98.000
+CPU2_Temp        | 40.000     | degrees C  | ok    | na        | na        | na        | 86.000    | 93.000    | 98.000
+PCH_Temp         | 63.000     | degrees C  | ok    | na        | na        | na        | 83.000    | 85.000    | 105.000
+DIMMG1_Temp      | 37.000     | degrees C  | ok    | na        | na        | na        | 81.000    | 82.000    | 100.000
+DIMMG2_Temp      | 37.000     | degrees C  | ok    | na        | na        | na        | 81.000    | 82.000    | 100.000
+CPU1_VR_Temp     | 39.000     | degrees C  | ok    | na        | na        | na        | 112.000   | 123.000   | 133.000
+CPU2_VR_Temp     | 38.000     | degrees C  | ok    | na        | na        | na        | 112.000   | 123.000   | 133.000
+NVME_Temp        | na         |            | na    | na        | na        | na        | 70.000    | 75.000    | 78.000
+RAID_Temp        | 0.000      | degrees C  | ok    | na        | na        | na        | 100.000   | 105.000   | 115.000
+PSU1_Temp        | 34.000     | degrees C  | ok    | na        | na        | na        | 62.000    | 65.000    | 68.000
+PSU2_Temp        | 0.000      | degrees C  | ok    | na        | na        | na        | 62.000    | 65.000    | 68.000
+CPU1_DTS         | 45.000     | degrees C  | ok    | na        | na        | na        | na        | na        | na
+CPU2_DTS         | 48.000     | degrees C  | ok    | na        | na        | na        | na        | na        | na
+NIC_Temp         | 47.000     | degrees C  | ok    | 0.000     | 0.000     | 0.000     | 100.000   | 105.000   | 115.000
+P3V3             | 3.250      | Volts      | ok    | 2.600     | 2.800     | 3.000     | 3.600     | 3.800     | 4.000
+P5V              | 4.900      | Volts      | ok    | 4.000     | 4.250     | 4.500     | 5.500     | 5.750     | 6.000
+P12V             | 11.980     | Volts      | ok    | 9.600     | 10.200    | 10.800    | 13.200    | 13.760    | 14.400
+CPU1_VCCIN       | 1.790      | Volts      | ok    | 1.150     | 1.250     | 1.390     | 2.100     | 2.200     | 2.300
+CPU2_VCCIN       | 1.790      | Volts      | ok    | 1.150     | 1.250     | 1.390     | 2.100     | 2.200     | 2.300
+Vbat             | 2.976      | Volts      | ok    | 1.810     | 2.009     | 2.207     | 3.298     | 3.497     | 3.695
+P5V_AUX          | 4.850      | Volts      | ok    | 4.000     | 4.250     | 4.500     | 5.500     | 5.750     | 6.000
+CPU1_VDDQ_ABC    | 1.230      | Volts      | ok    | 0.960     | 1.020     | 1.080     | 1.320     | 1.380     | 1.440
+CPU1_VDDQ_DEF    | 1.240      | Volts      | ok    | 0.960     | 1.020     | 1.080     | 1.320     | 1.380     | 1.440
+CPU2_VDDQ_ABC    | 1.230      | Volts      | ok    | 0.960     | 1.020     | 1.080     | 1.320     | 1.380     | 1.440
+CPU2_VDDQ_DEF    | 1.230      | Volts      | ok    | 0.960     | 1.020     | 1.080     | 1.320     | 1.380     | 1.440
+CPU1_VPP_ABC     | 2.500      | Volts      | ok    | 2.000     | 2.120     | 2.260     | 2.880     | 3.000     | 3.100
+CPU1_VPP_DEF     | 2.500      | Volts      | ok    | 2.000     | 2.120     | 2.260     | 2.880     | 3.000     | 3.100
+CPU2_VPP_ABC     | 2.500      | Volts      | ok    | 2.000     | 2.120     | 2.260     | 2.880     | 3.000     | 3.100
+CPU2_VPP_DEF     | 2.500      | Volts      | ok    | 2.000     | 2.120     | 2.260     | 2.880     | 3.000     | 3.100
+HDD_BP_P12V      | 12.350     | Volts      | ok    | 9.750     | 10.270    | 10.920    | 13.390    | 13.910    | 14.560
+HDD_BP_P5V       | 5.200      | Volts      | ok    | 4.030     | 4.290     | 4.550     | 5.330     | 5.720     | 5.980
+FAN1_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN1_R_Speed     | 3680.000   | RPM        | ok    | na        | 575.000   | 690.000   | na        | na        | na
+FAN2_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN2_R_Speed     | 3680.000   | RPM        | ok    | na        | 575.000   | 690.000   | na        | na        | na
+FAN3_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN3_R_Speed     | 3680.000   | RPM        | ok    | na        | 575.000   | 690.000   | na        | na        | na
+FAN4_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN4_R_Speed     | 3680.000   | RPM        | ok    | na        | 575.000   | 690.000   | na        | na        | na
+FAN5_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN5_R_Speed     | 3450.000   | RPM        | ok    | na        | 575.000   | 690.000   | na        | na        | na
+FAN6_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN6_R_Speed     | 3335.000   | RPM        | ok    | na        | 575.000   | 690.000   | na        | na        | na
+FAN7_F_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN7_R_Speed     | na         |            | na    | na        | 575.000   | 690.000   | na        | na        | na
+FAN1_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN1_R_Status    | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+FAN2_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN2_R_Status    | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+FAN3_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN3_R_Status    | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+FAN4_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN4_R_Status    | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+FAN5_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN5_R_Status    | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+FAN6_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN6_R_Status    | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+FAN7_F_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+FAN7_R_Status    | na         | discrete   | na    | na        | na        | na        | na        | na        | na
+Airflow_rate     | 15.000     | CFM        | ok    | na        | na        | na        | na        | na        | na
+PSU1_PIN         | 155.000    | Watts      | ok    | na        | na        | na        | na        | na        | 750.000
+PSU1_POUT        | 148.000    | Watts      | ok    | na        | na        | na        | na        | na        | 940.000
+PSU1_VIN         | 234.240    | Volts      | ok    | na        | na        | na        | na        | na        | na
+PSU1_IIN         | 0.650      | Amps       | ok    | na        | na        | na        | na        | na        | na
+PSU1_VOUT        | 12.100     | Volts      | ok    | 10.500    | na        | na        | na        | na        | 14.400
+PSU2_PIN         | na         |            | na    | na        | na        | na        | na        | na        | 750.000
+PSU2_POUT        | na         |            | na    | na        | na        | na        | na        | na        | 940.000
+PSU2_VIN         | na         |            | na    | na        | na        | na        | na        | na        | na
+PSU2_IIN         | na         |            | na    | na        | na        | na        | na        | na        | na
+PSU2_VOUT        | na         |            | na    | 10.500    | na        | na        | na        | na        | 14.400
+CPU_Power        | 78.000     | Watts      | ok    | na        | na        | na        | na        | na        | na
+MEM_Power        | 2.000      | Watts      | ok    | na        | na        | na        | na        | na        | na
+HDD_Power        | 14.190     | Watts      | ok    | na        | na        | na        | na        | na        | na
+FAN_Power        | 3.000      | Watts      | ok    | na        | na        | na        | na        | na        | na
+MB_Power         | 65.000     | Watts      | ok    | na        | na        | na        | na        | na        | na
+Total_Power      | 155.000    | Watts      | ok    | na        | na        | na        | na        | na        | na
+PSU1_Fan_Status  | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PSU2_Fan_Status  | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PSU1_Status      | 0x1        | discrete   | 0x0180| na        | na        | na        | na        | na        | na
+PSU2_Status      | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_IERR        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_IERR        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_Prochot     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_Prochot     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_Status      | 0x80       | discrete   | 0x8080| na        | na        | na        | na        | na        | na
+CPU2_Status      | 0x80       | discrete   | 0x8080| na        | na        | na        | na        | na        | na
+CPU1_MCERR       | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_MCERR       | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_A1     | 0x40       | discrete   | 0x4080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_A2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_B1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_B2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_C1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_C2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_D1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_D2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_E1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_E2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_F1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU1_DIMM_F2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_A1     | 0x40       | discrete   | 0x4080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_A2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_B1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_B2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_C1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_C2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_D1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_D2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_E1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_E2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_F1     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPU2_DIMM_F2     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+OCP_Status       | 0x2        | discrete   | 0x0280| na        | na        | na        | na        | na        | na
+ACPI_State       | 0x1        | discrete   | 0x0180| na        | na        | na        | na        | na        | na
+Watchdog2        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Power_Button     | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Event_Log        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PVNN_PCH_AUX     | 0.966      | Volts      | ok    | 0.679     | na        | 0.763     | 1.092     | na        | 1.197
+P1V05_PCH_AUX    | 1.029      | Volts      | ok    | 0.833     | na        | 0.938     | 1.148     | na        | 1.253
+P1V8_PCH_AUX     | 1.754      | Volts      | ok    | 1.439     | na        | 1.617     | 1.974     | na        | 2.153
+P12V_AUX         | 11.970     | Volts      | ok    | 9.576     | 10.206    | 10.773    | 13.230    | 13.734    | 14.427
+P12V_STBY        | 12.096     | Volts      | ok    | 9.576     | 10.206    | 10.773    | 13.230    | 13.734    | 14.427
+PVCCSA_CPU1      | 0.890      | Volts      | ok    | 0.400     | na        | 0.450     | 1.210     | na        | 1.320
+PVCCSA_CPU2      | 0.900      | Volts      | ok    | 0.400     | na        | 0.450     | 1.210     | na        | 1.320
+P12V_NVDIMM_ABC  | 12.300     | Volts      | ok    | 10.200    | na        | na        | na        | na        | 13.200
+P12V_NVDIMM_DEF  | 12.300     | Volts      | ok    | 10.200    | na        | na        | na        | na        | 13.200
+P12V_NVDIMM_GHJ  | 12.200     | Volts      | ok    | 10.200    | na        | na        | na        | na        | 13.200
+P12V_NVDIMM_KLM  | 12.100     | Volts      | ok    | 10.200    | na        | na        | na        | na        | 13.200
+PVCCIO_CPU1      | 0.980      | Volts      | ok    | 0.720     | na        | 0.810     | 1.210     | na        | 1.320
+PVCCIO_CPU2      | 0.980      | Volts      | ok    | 0.720     | na        | 0.810     | 1.210     | na        | 1.320
+P3V3_AUX         | 3.250      | Volts      | ok    | 2.650     | na        | 2.975     | 3.625     | na        | 3.950
+P1V2_DDR_BMC     | 1.180      | Volts      | ok    | 0.960     | na        | 1.080     | 1.320     | na        | 1.440
+P1V15_BMC        | 1.120      | Volts      | ok    | 0.920     | na        | 1.040     | 1.270     | na        | 1.380
+Disk1            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk2            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk3            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk4            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk5            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk6            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk7            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk8            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk9            | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk10           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk11           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk12           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk13           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk14           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk15           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Disk16           | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Rear Disk1       | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+Rear Disk2       | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PCIE1_AER        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PCIE2_AER        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PCIE3_AER        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PCIE4_AER        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PCIE5_AER        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+PCIE6_AER        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+RAID_Card        | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+RAID_Card_BBU    | 0x0        | discrete   | 0x0080| na        | na        | na        | na        | na        | na
+CPLD_Status      | 0x1        | discrete   | 0x0180| na        | na        | na        | na        | na        | na
+BMC_Status       | 0x1        | discrete   | 0x0180| na        | na        | na        | na        | na        | na

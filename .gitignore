@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+logs/
+.DS_Store
+
+# Local AI documentation
+/AGENTS.md
+/.ai/
+/constitution/
+/specs/

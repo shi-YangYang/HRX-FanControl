@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrx-fancontrol"
+version = "0.1.0"
+description = "Read-only multi-sensor thermal monitoring for Lenovo HR650X"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+dependencies = ["PyYAML>=6.0,<7"]
+
+[project.scripts]
+hrx-fancontrol = "hrx_fancontrol.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hrx_fancontrol = ["default.yaml"]
