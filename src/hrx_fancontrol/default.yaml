@@ -1,0 +1,77 @@
+# Development profile; these are not manufacturer-certified thermal limits.
+controller:
+  enabled: false
+  mode: dry-run
+  poll_interval_seconds: 10
+
+fan:
+  # Policy labels only. No verified conversion to CLI bytes or physical RPM exists yet.
+  minimum_percent: 15
+  maximum_percent: 60
+  # Finer low-speed steps, using values with historical HR650X observations.
+  levels: [15, 20, 30, 45, 60]
+  # Observed HR650X tachometers; FAN*_F_Speed and FAN7_*_Speed currently report NA.
+  installed: [FAN1_R_Speed, FAN2_R_Speed, FAN3_R_Speed, FAN4_R_Speed, FAN5_R_Speed, FAN6_R_Speed]
+  minimum_rpm: 1  # Detect stopped fans only; calibrate a useful floor on hardware.
+
+hysteresis:
+  enabled: true
+  downshift_delay_seconds: 60
+  downshift_margin_celsius: 3  # Inclusive: temperature <= entry threshold - margin.
+  upshift_delay_seconds: 0
+
+logging:
+  enabled: true
+  directory: logs
+  interval_seconds: 60
+  retention_days: 7
+  backup_enabled: false
+  queue_capacity: 256
+
+safety:
+  fail_safe_enabled: true
+  sensor_failure_action: safe_mode
+  ipmi_failure_action: stop_lowering
+  verify_fan_rpm: true
+  safe_level: 5  # Recommendation only; effectiveness has NOT been validated.
+  recovery_delay_seconds: 60
+  sensor_timeout_seconds: 30
+
+ipmi:
+  interface: open
+  command_timeout_seconds: 3
+  read_control_status: true
+
+# Four inclusive entry temperatures for L2, L3, L4, L5.
+# Fractional readings use these same cutoffs (e.g. CPU 55.9 remains L1).
+curves:
+  cpu: [56, 65, 75, 80]
+  # Provisional: 65 C enters L2; <=62 C for 60 s returns to L1.
+  # L5 at 80 C is a simulation choice below the observed BMC warning at 83 C.
+  pch: [65, 70, 75, 80]
+  dimm: [46, 50, 60, 70]
+  vrm: [61, 70, 85, 100]
+  nic: [56, 60, 70, 85]
+  psu: [46, 50, 55, 60]
+  # The observed Outlet 44 C can also recover to L1 after a temperature excursion.
+  outlet: [47, 52, 58, 65]
+
+# Emergency thresholds below initially equal each component's L5 threshold.
+# null curve = monitor only; BMC threshold alarms still trigger safety mode.
+sensors:
+  Inlet_Temp: {curve: null, critical: true, emergency_celsius: null, minimum: -20, maximum: 100, reject_zero: false}
+  Outlet_Temp: {curve: outlet, critical: true, emergency_celsius: 65, minimum: -20, maximum: 150, reject_zero: false}
+  CPU1_Temp: {curve: cpu, critical: true, emergency_celsius: 80, minimum: -20, maximum: 150, reject_zero: false}
+  CPU2_Temp: {curve: cpu, critical: true, emergency_celsius: 80, minimum: -20, maximum: 150, reject_zero: false}
+  PCH_Temp: {curve: pch, critical: true, emergency_celsius: 80, minimum: -20, maximum: 150, reject_zero: false}
+  DIMMG1_Temp: {curve: dimm, critical: true, emergency_celsius: 70, minimum: -20, maximum: 150, reject_zero: false}
+  DIMMG2_Temp: {curve: dimm, critical: true, emergency_celsius: 70, minimum: -20, maximum: 150, reject_zero: false}
+  CPU1_VR_Temp: {curve: vrm, critical: true, emergency_celsius: 100, minimum: -20, maximum: 150, reject_zero: false}
+  CPU2_VR_Temp: {curve: vrm, critical: true, emergency_celsius: 100, minimum: -20, maximum: 150, reject_zero: false}
+  NIC_Temp: {curve: nic, critical: true, emergency_celsius: 85, minimum: -20, maximum: 150, reject_zero: false}
+  PSU1_Temp: {curve: psu, critical: true, emergency_celsius: 60, minimum: -20, maximum: 150, reject_zero: false}
+  CPU1_DTS: {curve: null, critical: false, emergency_celsius: null, minimum: -128, maximum: 150, reject_zero: false}
+  CPU2_DTS: {curve: null, critical: false, emergency_celsius: null, minimum: -128, maximum: 150, reject_zero: false}
+  NVME_Temp: {curve: null, critical: false, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  RAID_Temp: {curve: null, critical: false, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: true}
+  PSU2_Temp: {curve: psu, critical: false, emergency_celsius: 60, minimum: -20, maximum: 150, reject_zero: true}
