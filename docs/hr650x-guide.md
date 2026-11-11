@@ -126,12 +126,59 @@ sudo .venv/bin/hrx-fancontrol --config profile.yaml
 默认每 15 秒开始一轮，整表读取限时 20 秒，状态读回另限时 3 秒，两条命令串行执行。采集失败后从本轮结束起再等待 15 秒；温度或风扇告警不延缓正常采样。超时失败的部分输出不会用于温度或 RPM 判断。
 样本过期检查仍为 30 秒；各命令超时及启用状态读回时的总预算都必须小于这个值。配置错误会阻止启动，`controller.enabled` 必须保持 `false`。
 `recovery_success_count` 和 `read_failure_count` 为正整数；`read_failure_level` 为 1～5 的整数，`read_failure_timeout_seconds` 为正的有限秒数。旧配置中的 `startup_level` 和 `recovery_delay_seconds` 已移除，升级前请删除；恢复次数使用 `recovery_success_count`，默认 5。阈值按每轮完成时判定；程序暂停期间无法准点发出建议，恢复后的首次采样也会检查中断时长。
-相对路径按当前工作目录解析。默认日志为 `logs/hrx-YYYY-MM-DD.jsonl`，按 UTC 日期保留今天及前六天；每 60 秒汇总一次，档位或告警变化立即记录。
-`run_id` 和 `poll_id` 标识运行与轮次，同一轮可能产生多条记录。`collection.counts` 统计所有已完成轮次的成功、失败、超时，另记取消次数；成功只表示读取和解析完成，温度、风扇状态仍保留在报告中。停止记录的 `collection_counts` 保存本次运行总数，不能用日志行数代替采样次数。
 `emergency_celsius` 默认均为 `null`。旧配置中的非空值仍是用户自定强制紧急线，会触发 L5 和恢复保持；设为 `null` 才恢复上述默认行为。
-最终报告的 `bmc_alarms` 记录 BMC 温度告警；`emergencies` 只记录会触发 L5 兜底或手工紧急线的告警。有曲线的 BMC 告警可与 `safety_state: normal` 同时出现，表示没有额外保护保持，不表示 BMC 状态正常。`read_failure` 记录连续失败数、距有效采样的秒数及触发原因；触发原因保留到健康恢复完成。`recovery` 记录健康次数、所需次数及是否保持，恢复进度变化也会写入日志。尚无建议时，`recommended_level` 和 `policy_target_percent` 为 `null`；关键数据不完整时 `component_level` 为 `null`，已知高温或故障仍可给出保护建议。进入 L5 时的通知事件为 `safety_alert`；温度读完、状态读回尚未结束时的提前通知标记为 `collection.status: in-progress`，此时尚未提交本轮计数。
-失败命令记录耗时、超时预算、分类、输出字节数及最多 2048 字符的输出尾部。尾部仅是已收到的内容，可能受输出缓冲影响，不能据此确定 BMC 卡在哪条请求。
-加 `--no-log` 关闭日志，`--json` 输出逐行 JSON。程序不安装开机服务；Ctrl+C 或 SIGTERM 会取消在途读取和等待，回收子进程并记录正常停止。
+
+### 日志内容
+
+相对路径按当前工作目录解析。默认日志为 `logs/hrx-YYYY-MM-DD.jsonl`，按 UTC 日期保留今天及前六天；每 60 秒汇总一次，档位、告警或恢复进度变化立即记录。每行一个 JSON 对象，新记录带 `schema_version: 2`；已有记录不改写，同一天可同时包含旧版与 v2。
+
+文件日志保留中文 `message`、建议 `level`、有效温度 `temperatures_c`、风扇 `fans_rpm` 和采样信息 `sampling`。`level` 只是建议，`applied: false` 表示未调速。`source` 区分服务器本机采集 `local-openipmi` 与离线回放 `offline-snapshot`。无效或缺失值为 `null`，不会把 NA 或未安装硬件的零值当作正常温度；DTS 语义未确认，不列入绝对温度表。
+
+以下为随附实机快照的**离线回放示例**，为阅读方便展开；文件中每条记录占一行：
+
+```json
+{
+  "schema_version": 2,
+  "time": "2026-11-11T08:54:51+00:00",
+  "event": "transition",
+  "run_id": "053036adfd5641bea20a08c48492b574",
+  "poll_id": 1,
+  "source": "offline-snapshot",
+  "mode": "dry-run",
+  "applied": false,
+  "message": "采样完成，按温度策略建议 L1。",
+  "level": "L1",
+  "temperatures_c": {
+    "Inlet_Temp": 26.0, "Outlet_Temp": 44.0,
+    "CPU1_Temp": 43.0, "CPU2_Temp": 40.0, "PCH_Temp": 63.0,
+    "DIMMG1_Temp": 37.0, "DIMMG2_Temp": 37.0,
+    "CPU1_VR_Temp": 39.0, "CPU2_VR_Temp": 38.0, "NIC_Temp": 47.0,
+    "PSU1_Temp": 34.0, "NVME_Temp": null, "RAID_Temp": null, "PSU2_Temp": null
+  },
+  "fans_rpm": {
+    "FAN1_R_Speed": 3680.0, "FAN2_R_Speed": 3680.0,
+    "FAN3_R_Speed": 3680.0, "FAN4_R_Speed": 3680.0,
+    "FAN5_R_Speed": 3450.0, "FAN6_R_Speed": 3335.0
+  },
+  "sampling": {
+    "status": "ok", "sensor_data_available": true, "elapsed_seconds": 0.001,
+    "counts": {"started": 1, "completed": 1, "successful": 1, "failed": 0, "timed_out": 0, "cancelled": 0}
+  }
+}
+```
+
+`run_id` 和 `poll_id` 标识运行与轮次，同一轮可能产生多条日志。`sampling.counts` 统计全部轮次，包含开始、完成、成功、失败、超时、取消；不能用日志行数代替。`status: ok` 仅表示读取和解析完成，不代表设备没有告警。`elapsed_seconds` 为本轮到记录生成时的耗时，最多三位小数。停止事件 `shutdown` 只保留原因和累计计数等基本信息。
+
+有异常时才增加以下字段：
+
+- `issues`：传感器、风扇或 BMC 异常。超出有效范围的温度为 `null`，实际异常读数留在说明中；未知诊断原样保留。整表读取失败不会展开为多个风扇缺失。
+- `errors`：失败操作、类型、说明、耗时、超时预算、退出码和有界输出尾部。输出尾部最多 2048 字符，只表示已收到的内容，不能据此确定 BMC 卡在哪条请求。
+- `recovery`：保持期间的健康采样次数与目标次数；第 5 次健康采样后移除，摘要说明解除保持。
+- `read_failures`：连续读取失败次数、距有效温度数据的秒数，以及尚未解除的保护触发原因。`failure-count` 表示连续失败达到阈值，`no-valid-sample-timeout` 表示有效温度采样超时。
+
+进入 L5 的事件为 `safety_alert`；提前报警会明确写“采样尚未结束”，`sampling.status` 为 `in-progress`，累计计数尚未结算本轮。BMC 异常只写诊断，不单独通知。
+
+加 `--json` 输出完整诊断报告，保留原始 BMC 字节、DTS 原值、命令详情和未校准策略标签，供专项排查使用；文件日志不复制这些字段。加 `--no-log` 关闭文件日志。程序不安装开机服务；Ctrl+C 或 SIGTERM 会取消在途读取和等待，回收子进程并记录正常停止。
 
 退出码：0 表示采样正常或用户主动停止，1 表示配置、文件或日志错误，2 表示建议 L5，或采集、关键数据、风扇故障。低于 L5 的单独 BMC 温度状态不改变退出码。故障明细仍显示为诊断并写入日志，主动停止不会清除记录。
 
@@ -140,7 +187,7 @@ sudo .venv/bin/hrx-fancontrol --config profile.yaml
 - `FAN1_R_Speed` 至 `FAN6_R_Speed` 是当前六个必需转速传感器；任意一个缺失或变成 NA 都会报告故障。
 - `FAN*_F_Speed` 和 `FAN7_*_Speed` 当前为 NA，不列为必需风扇；离散 `FAN*_Status` 状态位尚未解码。
 - RAID/PSU2 的 0°C 和 NVME 的 NA 按无效读数处理，不单独触发故障。Inlet、有效的 RAID/NVME 温度仅监测。
-- DTS 的含义尚未确认，仅展示原值，不当作 CPU 绝对温度。新增温度传感器需在配置中匹配名称。
+- DTS 的含义尚未确认，仅在完整诊断报告展示原值，不当作 CPU 绝对温度。新增温度传感器需在配置中匹配名称。
 
 `examples/hr650x-observed-sensors.txt` 是用户提供的 163 行实机快照；`examples/hr650x-sensors.txt` 是合成示例。离线输入必须同时使用 `--once`。
 

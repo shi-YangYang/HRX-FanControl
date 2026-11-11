@@ -291,12 +291,12 @@ class CollectionStabilityTest(unittest.TestCase):
             self.assertAlmostEqual(delay, 7.9)
         persisted = [record for record in records if record["event"] in ("transition", "summary")]
         self.assertLess(len(persisted), len(reports))
-        self.assertEqual(records[-1]["collection_counts"], dict(started=5, completed=5, successful=4,
+        self.assertEqual(records[-1]["sampling"]["counts"], dict(started=5, completed=5, successful=4,
                                                               failed=1, timed_out=1, cancelled=0))
-        self.assertEqual(reports[-1]["collection"]["counts"], records[-1]["collection_counts"])
+        self.assertEqual(reports[-1]["collection"]["counts"], records[-1]["sampling"]["counts"])
         self.assertFalse(any(record["event"] == "safety_alert" for record in records))
         first = persisted[0]
-        self.assertEqual(first["collection"]["status"], "failed")
+        self.assertEqual(first["sampling"]["status"], "failed")
         self.assertFalse(any(record["applied"] for record in records))
 
 
@@ -342,7 +342,7 @@ class CLICancellationTest(FakeIPMIProgram):
                 records = self.records(f"logs-{stage}")
                 self.assertEqual([record["event"] for record in records], ["shutdown"])
                 self.assertEqual(records[0]["reason"], "requested")
-                self.assertEqual(records[0]["collection_counts"], dict(started=1, completed=0, successful=0,
+                self.assertEqual(records[0]["sampling"]["counts"], dict(started=1, completed=0, successful=0,
                                                                      failed=0, timed_out=0, cancelled=1))
 
     def test_signal_interrupts_failure_wait_and_keeps_real_fault_evidence(self):
@@ -366,7 +366,7 @@ class CLICancellationTest(FakeIPMIProgram):
         self.assertEqual(reports[0]["collection"]["status"], "failed")
         records = self.records()
         self.assertEqual([record["event"] for record in records], ["transition", "shutdown"])
-        self.assertEqual(records[-1]["collection_counts"], dict(started=1, completed=1, successful=0,
+        self.assertEqual(records[-1]["sampling"]["counts"], dict(started=1, completed=1, successful=0,
                                                               failed=1, timed_out=0, cancelled=0))
         self.assertEqual(len((self.root / "calls").read_text().splitlines()), 2)
 

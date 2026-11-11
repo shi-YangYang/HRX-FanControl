@@ -384,11 +384,11 @@ class LoggingAndCLITest(unittest.TestCase):
         self.assertNotIn(L5_ALERT, "\n".join(render(report) for report in reports))
         alerts = [record for record in records if record["event"] == "safety_alert"]
         self.assertEqual([record["poll_id"] for record in alerts], [1, 8])
-        self.assertTrue(all(record["collection"]["status"] == "in-progress" for record in alerts))
+        self.assertTrue(all(record["sampling"]["status"] == "in-progress" for record in alerts))
         self.assertTrue(all("recovery" not in record for record in alerts))
         self.assertTrue(reports[1]["bmc_alarms"])
         self.assertTrue(any(record.get("poll_id") == 2 and record["event"] == "transition"
-                            and record["bmc_alarms"] for record in records))
+                            and "PCH_Temp: BMC 温度告警" in record.get("issues", []) for record in records))
         self.assertFalse(any(record["applied"] for record in records))
 
     @patch("hrx_fancontrol.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
@@ -418,8 +418,8 @@ class LoggingAndCLITest(unittest.TestCase):
             records = [json.loads(line) for path in (root / "logs").glob("*.jsonl")
                        for line in path.read_text().splitlines()]
             self.assertEqual([record["event"] for record in records], ["transition", "shutdown"])
-            self.assertEqual(records[0]["collection"]["status"], "ok")
-            self.assertTrue(all(record["bmc_alarms"] == [message] for record in records[:-1]))
+            self.assertEqual(records[0]["sampling"]["status"], "ok")
+            self.assertTrue(all(record["issues"] == ["PCH_Temp: BMC 温度告警"] for record in records[:-1]))
             self.assertNotEqual(transition_key(report), transition_key({**report, "bmc_alarms": []}))
             self.assertFalse(any(record["applied"] for record in records))
             popen.assert_not_called()
@@ -499,7 +499,7 @@ class LoggingAndCLITest(unittest.TestCase):
             records = [json.loads(line) for path in (root / "logs").glob("*.jsonl")
                        for line in path.read_text().splitlines()]
             self.assertEqual([record["event"] for record in records], ["transition", "shutdown"])
-            self.assertTrue(all(record["recommended_level"] is None for record in records[:-1]))
+            self.assertTrue(all(record["level"] is None for record in records[:-1]))
             self.assertFalse(any(record["applied"] for record in records))
             popen.assert_not_called()
 

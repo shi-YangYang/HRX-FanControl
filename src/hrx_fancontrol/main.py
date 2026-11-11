@@ -12,6 +12,7 @@ from .collection import CollectionStats, collect, poll_wait_seconds, timestamp
 from .config import ConfigError, load_config
 from .ipmi import CollectionCancelled, ReadOnlyIPMI
 from .logger import AsyncLogger, transition_key
+from .log_record import format_log_record
 from .thermal_engine import ThermalEngine
 
 
@@ -87,8 +88,7 @@ def main(argv=None):
             nonlocal l5_notified
             if report["recommended_level"] == 5 and not l5_notified:
                 print(L5_ALERT, file=sys.stderr, flush=True)
-                # Serialize now so later readback changes cannot mutate the queued record.
-                logger.emit(json.loads(json.dumps({"event": "safety_alert", **report})))
+                logger.emit(format_log_record(report, "safety_alert", time.monotonic() - start))
                 l5_notified = True
 
         while not stop.is_set():
@@ -106,7 +106,7 @@ def main(argv=None):
             now = time.monotonic()
             if key != previous_key or now - last_log >= config["logging"]["interval_seconds"]:
                 event = "transition" if key != previous_key else "summary"
-                logger.emit({"event": event, **report})
+                logger.emit(format_log_record(report, event, now - start))
                 last_log = now
             previous_key = key
             print(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report), flush=True)
@@ -119,10 +119,11 @@ def main(argv=None):
                                        time.monotonic() - start))
         if stop.is_set():
             exit_code = 0
-        logger.emit({"event": "shutdown", "timestamp": timestamp(), "mode": "dry-run", "applied": False,
+        logger.emit(format_log_record({"timestamp": timestamp(), "mode": "dry-run", "applied": False,
                      "run_id": stats.run_id, "poll_id": stats.started,
+                     "source": "offline-snapshot" if source is not None else "local-openipmi",
                      "collection_counts": stats.snapshot(),
-                     "reason": "requested" if stop.is_set() else "once"})
+                     "reason": "requested" if stop.is_set() else "once"}, "shutdown"))
     except (ConfigError, OSError, ValueError) as exc:
         print(f"hrx-fancontrol: {exc}", file=sys.stderr)
         exit_code = 1

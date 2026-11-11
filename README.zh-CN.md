@@ -41,7 +41,7 @@ sudo .venv/bin/hrx-fancontrol
 .venv/bin/hrx-fancontrol --once --input examples/hr650x-observed-sensors.txt --no-log
 ```
 
-加 `--json` 输出 JSON，加 `--no-log` 关闭文件日志。日志保存在 `logs/`，保留七个 UTC 日期。
+加 `--json` 输出完整诊断报告，加 `--no-log` 关闭文件日志。文件日志采用精简 JSONL v2，包含中文摘要、温度、RPM、采样总数和必要异常，与 `--json` 内容不同。日志保存在 `logs/`，保留七个 UTC 日期；格式见[日志示例](docs/hr650x-guide.md#日志内容)。
 
 ## 文档
 

@@ -41,7 +41,7 @@ Replay the supplied snapshot without a BMC or ipmitool:
 .venv/bin/hrx-fancontrol --once --input examples/hr650x-observed-sensors.txt --no-log
 ```
 
-Add `--json` for JSON output or `--no-log` to disable file logging. Logs are saved in `logs/` and retained for seven UTC dates.
+Add `--json` for the full diagnostic report or `--no-log` to disable file logging. File logs use compact JSONL v2 with Chinese summaries, temperatures, RPM, sampling totals, and diagnostics when needed; they differ from `--json`. Logs are saved in `logs/` and retained for seven UTC dates. See the [log example](docs/hr650x-guide.md#日志内容).
 
 ## Documentation
 
