@@ -68,7 +68,7 @@ class HR650XObservationTest(unittest.TestCase):
         readings["fan6_r_speed"] = replace(readings["fan6_r_speed"], value=None, unit="",
                                            status="na", error="unavailable or nonnumeric value: na")
         report = engine.update(readings, 70, 70)
-        self.assertEqual(report["recommended_level"], 5)
+        self.assertEqual(report["recommended_level"], 3)
         self.assertEqual(report["safety_state"], "safe-mode")
         self.assertTrue(any("FAN6_R_Speed" in fault for fault in report["faults"]))
 

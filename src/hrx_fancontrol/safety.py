@@ -16,10 +16,11 @@ class Safety:
         self.last_valid_sample_at = None
         self.read_failure_reasons = []
 
-    def preview(self, requested, faults, emergency):
+    def preview(self, requested, faults, emergency, *, fan_faults=()):
         """Report known hardware alarms before readback, without committing a sample."""
-        if faults or emergency:
-            return (_highest(requested, self.previous_level, 5 if emergency else self.settings["safe_level"]),
+        if faults or fan_faults or emergency:
+            return (_highest(requested, self.previous_level, 3 if fan_faults else None,
+                             self.settings["safe_level"] if faults else None, 5 if emergency else None),
                     "emergency" if emergency else "safe-mode")
         level = _highest(requested, self.previous_level)
         return level, "collection-pending" if level is not None else "waiting-for-sample"
@@ -43,7 +44,7 @@ class Safety:
                 "required_samples": self.settings["recovery_success_count"], "holding": self.holding}
 
     def update(self, requested, faults, emergency, now, *, read_failed=False,
-               valid_sample=True, sampled_at=None, gap=False, alerting=False):
+               valid_sample=True, sampled_at=None, gap=False, alerting=False, fan_faults=()):
         """Commit known demand; only complete healthy polls advance recovery."""
         sampled_at = now if sampled_at is None else sampled_at
         if self.started_at is None:
@@ -65,12 +66,12 @@ class Safety:
         if valid_sample:
             self.last_valid_sample_at = sampled_at
         floor = self.settings["read_failure_level"] if self.read_failure_reasons else None
-        unhealthy = read_failed or not valid_sample or faults or emergency
+        unhealthy = read_failed or not valid_sample or faults or fan_faults or emergency
         if unhealthy or gap or overdue:
             self.healthy_samples = 0
             self.holding = self.previous_level is not None or floor is not None
-        if faults or emergency:
-            level, state = self.preview(_highest(requested, floor), faults, emergency)
+        if faults or fan_faults or emergency:
+            level, state = self.preview(_highest(requested, floor), faults, emergency, fan_faults=fan_faults)
             self.holding = True
         elif read_failed or not valid_sample:
             level = _highest(requested, self.previous_level, floor)

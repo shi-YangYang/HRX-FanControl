@@ -188,8 +188,84 @@ class EngineTest(unittest.TestCase):
             self.assertEqual(report["recommended_level"], expected)
         stopped = {**low, "fan1_r_speed": replace(low["fan1_r_speed"], value=0)}
         report = ThermalEngine(self.config).update(stopped, 0, 0)
-        self.assertEqual(report["recommended_level"], 5)
+        self.assertEqual(report["recommended_level"], 3)
         self.assertEqual(report["safety_state"], "safe-mode")
+
+    def test_fan_fault_types_preview_and_commit_l3_without_losing_diagnostics(self):
+        low, _ = parse_sensors(SAMPLE)
+        fan = low["fan1_r_speed"]
+        cases = {
+            "stopped": replace(fan, value=0),
+            "below-floor": replace(fan, value=0.5),
+            "alarm": replace(fan, status="lcr"),
+            "wrong-unit": replace(fan, unit="unspecified"),
+            "unavailable": replace(fan, value=None, error="unavailable or nonnumeric value: na"),
+            "missing": None,
+            "multiple": replace(fan, value=0),
+        }
+        for kind, reading in cases.items():
+            with self.subTest(kind=kind):
+                sample = dict(low)
+                if reading is None:
+                    sample.pop("fan1_r_speed")
+                else:
+                    sample["fan1_r_speed"] = reading
+                if kind == "multiple":
+                    sample.pop("fan2_r_speed")
+                    sample["fan6_r_speed"] = replace(low["fan6_r_speed"], status="lnc")
+                engine = ThermalEngine(self.config)
+                pending = engine.assess(sample, 0, 0)
+                self.assertEqual(pending.report["recommended_level"], 3)
+                report = engine.finalize(pending, 0)
+                self.assertEqual(report["recommended_level"], 3)
+                self.assertEqual(report["component_level"], 1)
+                self.assertEqual(report["policy_target_percent"], 30)
+                self.assertEqual(report["recovery"]["healthy_samples"], 0)
+                self.assertTrue(report["recovery"]["holding"])
+                self.assertTrue(any("FAN1_R_Speed:" in fault for fault in report["faults"]))
+
+    def test_fan_fault_does_not_lower_hotter_or_other_fault_demands(self):
+        low, _ = parse_sensors(SAMPLE)
+        stopped = {**low, "fan1_r_speed": replace(low["fan1_r_speed"], value=0)}
+        for temperature, expected in ((75, 4), (80, 5)):
+            with self.subTest(temperature=temperature):
+                sample = {**stopped, "pch_temp": replace(low["pch_temp"], value=temperature)}
+                engine = ThermalEngine(self.config)
+                pending = engine.assess(sample, 0, 0)
+                self.assertEqual(pending.report["recommended_level"], expected)
+                self.assertEqual(engine.finalize(pending, 0)["recommended_level"], expected)
+        for other in ("critical-missing", "uncurved-alarm"):
+            with self.subTest(other=other):
+                sample = dict(stopped)
+                if other == "critical-missing":
+                    sample.pop("pch_temp")
+                else:
+                    sample["inlet_temp"] = replace(low["inlet_temp"], status="unc")
+                engine = ThermalEngine(self.config)
+                self.assertEqual(engine.update(sample, 0, 0)["recommended_level"], 5)
+                # A remaining fan fault cannot lower an existing L5 recovery hold.
+                self.assertEqual(engine.update(stopped, 15, 15)["recommended_level"], 5)
+                for now in (30, 45, 60, 75):
+                    self.assertEqual(engine.update(low, now, now)["recommended_level"], 5)
+                self.assertEqual(engine.update(low, 90, 90)["recommended_level"], 1)
+
+    def test_invalid_tables_cannot_create_fan_fault_demand(self):
+        low, _ = parse_sensors(SAMPLE)
+        stopped = {**low, "fan1_r_speed": replace(low["fan1_r_speed"], value=0)}
+        for failure in ("read-failed", "already-stale", "expires-before-commit"):
+            with self.subTest(failure=failure):
+                engine = ThermalEngine(self.config)
+                if failure == "read-failed":
+                    report = engine.update(stopped, 0, 0, read_failed=True)
+                elif failure == "already-stale":
+                    report = engine.update(stopped, 31, 0)
+                else:
+                    pending = engine.assess(stopped, 0, 0)
+                    self.assertEqual(pending.report["recommended_level"], 3)
+                    report = engine.finalize(pending, 31)
+                self.assertIsNone(report["recommended_level"])
+                self.assertEqual(report["safety_state"], "waiting-for-sample")
+                self.assertEqual(report["read_failure"]["consecutive_failures"], 1)
 
     def test_component_curves_and_fractional_boundaries(self):
         for curve_name, thresholds in self.config["curves"].items():
@@ -319,6 +395,19 @@ class IPMITest(unittest.TestCase):
 
 
 class LoggingAndCLITest(unittest.TestCase):
+    def test_fan_only_fault_keeps_diagnostics_without_l5_notice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "sample.txt"
+            snapshot.write_text(SAMPLE.replace("3335.000", "0.000"))
+            output, errors = io.StringIO(), io.StringIO()
+            with redirect_stdout(output), redirect_stderr(errors):
+                result = main(["--once", "--input", str(snapshot), "--no-log", "--json"])
+            report = json.loads(output.getvalue())
+            self.assertEqual(result, 2)  # The fault remains observable to CLI callers.
+            self.assertEqual(report["recommended_level"], 3)
+            self.assertTrue(report["faults"])
+            self.assertEqual(errors.getvalue(), "")
+
     def test_all_curve_and_uncurved_sources_emit_same_l5_notice(self):
         cases = (("CPU1_Temp", 80, False), ("PCH_Temp", 80, False),
                  ("DIMMG1_Temp", 70, False), ("CPU1_VR_Temp", 100, False),

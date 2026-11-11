@@ -195,6 +195,9 @@ def format_log_record(report, event, elapsed_seconds=None):
                   "elapsed_seconds": round(elapsed_seconds, 3) if elapsed_seconds is not None else None,
                   "counts": dict(collection["counts"])},
     )
+    if "control" in report:
+        from copy import deepcopy
+        record["control"] = deepcopy({key: value for key, value in report["control"].items() if key != "command"})
     issues = _issues(report)
     if issues:
         record["issues"] = issues

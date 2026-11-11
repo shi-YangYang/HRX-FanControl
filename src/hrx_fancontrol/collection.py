@@ -84,10 +84,13 @@ def _collect(ipmi, engine, config, source, on_alert, stop, stats, poll_id):
     assessment = engine.assess(readings, time.monotonic(), sampled_at, errors, read_failed=bool(failures))
     report = assessment.report
     report.update(
-        timestamp=timestamp(), run_id=stats.run_id, poll_id=poll_id,
+        timestamp=timestamp(), run_id=stats.run_id, poll_id=poll_id, sampled_at_monotonic=sampled_at,
         source="offline-snapshot" if source is not None else "local-openipmi", commands=commands,
         bmc={"raw_bytes": None, "mode": "unverified", "percent": None},
         collection={"status": "in-progress", "sensor_data_available": bool(readings),
+                    # Command success does not make a stale table usable evidence.
+                    # Reuse the policy assessment so control and policy agree on validity.
+                    "sensor_data_valid": assessment.valid_sample,
                     "failure_kinds": failures, "counts": stats.snapshot()},
     )
     check_cancelled(stop)
@@ -110,7 +113,13 @@ def _collect(ipmi, engine, config, source, on_alert, stop, stats, poll_id):
                 commands[-1] = result.summary(parse_failed=True)
             report["faults"].append(f"BMC status: {exc}")
     check_cancelled(stop)
-    return engine.finalize(assessment, time.monotonic(), read_failed=bool(failures))
+    report = engine.finalize(assessment, time.monotonic(), read_failed=bool(failures))
+    # Optional status reads and scheduler delays can expire a previously fresh table.
+    # Reconcile both consumers and poll accounting with the single final policy commit.
+    report["collection"]["sensor_data_valid"] = assessment.valid_sample
+    if assessment.stale:
+        failures.append("sensor:stale")
+    return report
 
 
 def poll_wait_seconds(report, poll_interval, elapsed):

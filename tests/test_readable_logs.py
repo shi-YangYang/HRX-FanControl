@@ -133,7 +133,7 @@ class ReadableLogTest(unittest.TestCase):
         for value in ("na", "0"):
             with self.subTest(value=value):
                 record = format_log_record(self.poll(1, text=with_value("FAN1_R_Speed", value)), "transition", 0.2)
-                self.assertEqual(record["level"], "L5")
+                self.assertEqual(record["level"], "L3")
                 self.assertEqual(record["fans_rpm"]["FAN1_R_Speed"], None if value == "na" else 0)
                 self.assertTrue(any(issue.startswith("FAN1_R_Speed:") for issue in record["issues"]))
 

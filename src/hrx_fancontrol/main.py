@@ -20,6 +20,7 @@ L5_ALERT = "警告：当前建议档位已达到 L5。"
 
 
 def render(report):
+    control = report.get("control")
     available = report["component_level"] is not None
     demand = (f"Component demand L{report['component_level']}" if available else
               "Component demand unavailable")
@@ -30,6 +31,13 @@ def render(report):
              f"{demand}; {recommendation} [{report['safety_state']}]",
              "IPMI argument: unresolved; expected RPM: unresolved; no encoding conversion performed",
              f"{'Sensor':<18} {'Celsius':>8} {'Level':>7} {'C/min':>8}  State"]
+    if control:
+        lines[0] = f"{report['timestamp']}  {report['mode'].upper()} — {control['status']}"
+        lines[1] = lines[1].replace(", uncalibrated", ", calibrated profile")
+        target = f"L{control['target_level']}" if control['target_level'] is not None else "waiting for valid data"
+        lines[2] = (f"Control target {target}; byte {control['byte']}; "
+                    f"fresh RPM confirmations {control['stable_samples']}/{control['required_samples']}; "
+                    f"verified={control['verified']}")
     failure = report.get("read_failure")
     if failure:
         lines.insert(3, f"Read failures: {failure['consecutive_failures']}/{failure['count_threshold']}; "
@@ -50,19 +58,38 @@ def render(report):
         lines.append(f"{name}: {fan['rpm'] if fan['rpm'] is not None else '--'} RPM  {fan['error'] or 'ok'}")
     raw = report["bmc"]["raw_bytes"]
     lines.append(f"BMC raw bytes: {' '.join(raw) if raw else 'unavailable / not read'}; mode and percentage unverified")
+    if control and raw:
+        from .protocol import decode_status
+        lines[-1] = f"BMC raw bytes: {' '.join(raw)}; mode={decode_status(raw)['mode']}"
     for message in report["faults"]:
         lines.append(f"Diagnostic: {message}")
     return "\n".join(lines)
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="HR650X read-only thermal monitor and fan-level simulator")
+    parser = argparse.ArgumentParser(description="HR650X thermal monitor and explicitly enabled calibrated fan control")
     parser.add_argument("--config", type=Path, help="YAML overrides; bundled HR650X defaults are always loaded")
     parser.add_argument("--once", action="store_true", help="read one snapshot and exit")
     parser.add_argument("--input", type=Path, help="offline ipmitool sensor output; requires --once")
     parser.add_argument("--json", action="store_true", help="JSON snapshot per line")
     parser.add_argument("--no-log", action="store_true", help="disable local file logging")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--calibrate", type=Path, metavar="NEW_JSON", help="explicitly write L5 to L1 and save live machine calibration")
+    modes.add_argument("--auto", action="store_true", help="enable calibrated continuous automatic control")
+    modes.add_argument("--manual-level", type=int, choices=range(1, 6), help="continuous control with this level as a floor")
+    modes.add_argument("--service-recover", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--profile", type=Path, help="same-machine calibration JSON, required for automatic/manual control")
+    parser.add_argument("--resume-control", action="store_true", help="explicitly resume control after an external override")
     args = parser.parse_args(argv)
+    controlling = args.calibrate is not None or args.auto or args.manual_level is not None or args.service_recover
+    if args.resume_control and (not controlling or args.service_recover):
+        parser.error("--resume-control requires --auto, --manual-level, or --calibrate")
+    if controlling and (args.input or args.once):
+        parser.error("Control/calibration cannot be combined with --input or --once")
+    if (args.auto or args.manual_level is not None or args.service_recover) and not args.profile:
+        parser.error("Automatic/manual/recovery control requires --profile")
+    if args.profile and (not controlling or args.calibrate):
+        parser.error("--profile is only valid with --auto, --manual-level, or service recovery")
     if args.input and not args.once:
         parser.error("--input requires --once; replaying an unchanged file as fresh sensor data is unsafe")
     logger = None
@@ -73,6 +100,9 @@ def main(argv=None):
         config = load_config(args.config)
         if args.no_log:
             config["logging"]["enabled"] = False
+        if controlling:
+            from .control_runtime import run_control
+            return run_control(args, config)
         source = args.input.read_text(encoding="utf-8") if args.input else None
         logger = AsyncLogger(config["logging"])
         engine = ThermalEngine(config)

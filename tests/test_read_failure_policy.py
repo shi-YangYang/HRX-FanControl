@@ -174,20 +174,24 @@ class ReadFailurePolicyTest(unittest.TestCase):
         self.assertEqual(self.poll(160, sensor="timeout")["recommended_level"], 3)
 
     def test_known_hardware_faults_still_protect_before_readback(self):
-        for sample, expected_state in (
-            (SAMPLE.replace("27.000     | degrees C  | ok", "27.000     | degrees C  | unc"), "emergency"),
-            (SAMPLE.replace("3335.000", "0.000"), "safe-mode"),
-            ("\n".join(line for line in SAMPLE.splitlines() if not line.startswith("PCH_Temp")), "safe-mode"),
+        for sample, expected_state, expected_level in (
+            (SAMPLE.replace("27.000     | degrees C  | ok", "27.000     | degrees C  | unc"), "emergency", 5),
+            (SAMPLE.replace("3335.000", "0.000"), "safe-mode", 3),
+            ("\n".join(line for line in SAMPLE.splitlines() if not line.startswith("PCH_Temp")), "safe-mode", 5),
         ):
             with self.subTest(state=expected_state):
                 self.setUp()
                 self.warm()
                 report = self.poll(75, text=sample, status="timeout")
-                self.assertEqual(report["recommended_level"], 5)
+                self.assertEqual(report["recommended_level"], expected_level)
                 self.assertEqual(report["safety_state"], expected_state)
                 self.assertEqual(report["read_failure"]["consecutive_failures"], 1)
-                self.assertEqual(self.calls[:3], ["sensor", "alert", "status"])
-                self.assertEqual(self.alerts[0]["recommended_level"], 5)
+                if expected_level == 5:
+                    self.assertEqual(self.calls[:3], ["sensor", "alert", "status"])
+                    self.assertEqual(self.alerts[0]["recommended_level"], 5)
+                else:
+                    self.assertEqual(self.calls, ["sensor", "status"])
+                    self.assertEqual(self.alerts, [])
 
     def test_advisory_bmc_alarm_is_not_a_failure_or_healthy_recovery(self):
         self.warm()
@@ -207,12 +211,12 @@ class ReadFailurePolicyTest(unittest.TestCase):
         for count, now in enumerate((105, 120), 1):
             self.assertEqual(self.poll(now)["recovery"]["healthy_samples"], count)
         report = self.poll(135, text=alarm)
-        self.assertEqual(report["recommended_level"], 5)
+        self.assertEqual(report["recommended_level"], 3)
         self.assertEqual(report["recovery"]["healthy_samples"], 0)
         self.assertEqual(report["read_failure"]["consecutive_failures"], 0)
         for count, now in enumerate((150, 165, 180, 195), 1):
             report = self.poll(now)
-            self.assertEqual(report["recommended_level"], 5)
+            self.assertEqual(report["recommended_level"], 3)
             self.assertEqual(report["recovery"]["healthy_samples"], count)
         self.assertEqual(self.poll(210)["recommended_level"], 1)
 
@@ -326,14 +330,14 @@ class ReadFailurePolicyTest(unittest.TestCase):
         for count, now in enumerate((90, 105), 1):
             self.assertEqual(self.poll(now)["recovery"]["healthy_samples"], count)
         failed = self.poll(120, status="timeout")
-        self.assertEqual(failed["recommended_level"], 5)
+        self.assertEqual(failed["recommended_level"], 3)
         self.assertEqual(failed["recovery"]["healthy_samples"], 0)
         self.poll(135)
         self.poll(150)
         self.assertEqual(self.poll(181)["recovery"]["healthy_samples"], 1)
         for count, now in enumerate((196, 211, 226), 2):
             report = self.poll(now)
-            self.assertEqual(report["recommended_level"], 5)
+            self.assertEqual(report["recommended_level"], 3)
             self.assertEqual(report["recovery"]["healthy_samples"], count)
         stop = threading.Event()
         with self.assertRaises(CollectionCancelled):
