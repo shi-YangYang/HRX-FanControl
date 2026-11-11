@@ -1,7 +1,6 @@
 """Regression cases from the owner's HR650X / BMC 11.99 sensor output."""
 import io
 import json
-import subprocess
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
@@ -9,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hrx_fancontrol.config import load_config
+from hrx_fancontrol.ipmi import CommandResult, ReadOnlyIPMI
 from hrx_fancontrol.main import main
 from hrx_fancontrol.sensors import parse_sensors
 from hrx_fancontrol.thermal_engine import ThermalEngine
@@ -20,10 +20,10 @@ OBSERVED_STATUS = "20 0f 0f 0f 0f 0f 0f 0f 0f"
 
 
 class HR650XObservationTest(unittest.TestCase):
-    @patch("hrx_fancontrol.ipmi.subprocess.run")
-    def test_real_snapshot_identifies_six_fans_without_false_missing_alarms(self, run):
-        run.side_effect = [subprocess.CompletedProcess([], 0, OBSERVED, ""),
-                           subprocess.CompletedProcess([], 0, OBSERVED_STATUS, "")]
+    @patch.object(ReadOnlyIPMI, "_execute")
+    def test_real_snapshot_identifies_six_fans_without_false_missing_alarms(self, execute):
+        execute.side_effect = [CommandResult(("sensor",), OBSERVED, "", 0, None, 0.1),
+                               CommandResult(("raw",), OBSERVED_STATUS, "", 0, None, 0.1)]
         output = io.StringIO()
         with redirect_stdout(output):
             result = main(["--once", "--json", "--no-log"])
@@ -44,13 +44,13 @@ class HR650XObservationTest(unittest.TestCase):
         self.assertEqual(report["sensors"]["CPU1_DTS"]["celsius"], 45)
         self.assertIsNone(report["sensors"]["CPU1_DTS"]["requested_level"])
         self.assertEqual(report["component_level"], 1)
-        self.assertEqual(report["recommended_level"], 5)  # Startup hold, not a hardware setting.
+        self.assertEqual(report["recommended_level"], 1)  # First valid snapshot is sufficient.
         self.assertEqual(report["bmc"]["raw_bytes"], ["0x20"] + ["0x0f"] * 8)
         self.assertIsNone(report["bmc"]["percent"])
         self.assertEqual(report["calibration"], {
             "status": "unverified", "ipmi_argument": None, "expected_rpm": None})
         self.assertFalse(report["applied"])
-        self.assertEqual([call.args[0] for call in run.call_args_list], [
+        self.assertEqual([call.args[0] for call in execute.call_args_list], [
             ("ipmitool", "-I", "open", "sensor"),
             ("ipmitool", "-I", "open", "raw", "0x2e", "0x31")])
 
@@ -111,12 +111,12 @@ class HR650XObservationTest(unittest.TestCase):
         self.assertEqual(report["policy_target_percent"], 15)
         self.assertFalse(report["applied"])
 
-    def test_pch_high_levels_are_reachable_before_emergency_and_bmc_alarm_wins(self):
+    def test_pch_curve_and_bmc_alarm_are_independent(self):
         readings, _ = parse_sensors(OBSERVED)
         config = load_config()
-        config["safety"]["recovery_delay_seconds"] = 0
         for temperature, expected_level, expected_percent in (
-            (63, 1, 15), (65, 2, 20), (70, 3, 30), (75, 4, 45), (80, 5, 60)
+            (63, 1, 15), (65, 2, 20), (70, 3, 30), (75, 4, 45),
+            (80, 5, 60), (82.9, 5, 60), (83, 5, 60)
         ):
             with self.subTest(temperature=temperature):
                 sample = dict(readings)
@@ -124,13 +124,79 @@ class HR650XObservationTest(unittest.TestCase):
                 report = ThermalEngine(config).update(sample, 0, 0)
                 self.assertEqual(report["recommended_level"], expected_level)
                 self.assertEqual(report["policy_target_percent"], expected_percent)
-                self.assertEqual(report["safety_state"], "emergency" if temperature == 80 else "normal")
+                self.assertEqual(report["safety_state"], "normal")
+                self.assertEqual(report["bmc_alarms"], ["PCH_Temp: BMC threshold alarm"] if temperature >= 83 else [])
+                self.assertEqual(report["emergencies"], [])
+                self.assertFalse(report["recovery"]["holding"])
 
-        # A lower hardware warning must take precedence over our provisional curve.
+        # A lower BMC limit is still reported; the curve alone determines the level.
+        config["sensors"]["pCh_TeMp"] = config["sensors"].pop("PCH_Temp")
         readings["pch_temp"] = replace(readings["pch_temp"], value=74, upper_warning=73)
         report = ThermalEngine(config).update(readings, 0, 0)
+        self.assertEqual(report["recommended_level"], 3)
+        self.assertIn("PCH_Temp: BMC threshold alarm", report["bmc_alarms"])
+        self.assertEqual(report["emergencies"], [])
+        self.assertFalse(report["recovery"]["holding"])
+
+    def test_pch_alarm_cools_down_without_an_extra_recovery_hold(self):
+        readings, _ = parse_sensors(OBSERVED)
+        engine = ThermalEngine(load_config())
+        hot = {**readings, "pch_temp": replace(readings["pch_temp"], value=83)}
+        report = engine.update(hot, 0, 0)
+        self.assertTrue(report["bmc_alarms"])
+        self.assertFalse(report["recovery"]["holding"])
+        for now in (15, 45, 74):
+            report = engine.update(readings, now, now)
+            self.assertEqual(report["recommended_level"], 5)
+            self.assertEqual(report["recovery"]["healthy_samples"], 0)
+        report = engine.update(readings, 75, 75)
+        self.assertEqual(report["recommended_level"], 4)
+        self.assertEqual(report["safety_state"], "normal")
+        self.assertFalse(report["recovery"]["holding"])
+
+    def test_uncurved_bmc_alarm_protects_and_requires_five_healthy_samples(self):
+        readings, _ = parse_sensors(OBSERVED)
+        engine = ThermalEngine(load_config())
+        hot = {**readings, "inlet_temp": replace(readings["inlet_temp"], value=42)}
+        report = engine.update(hot, 0, 0)
         self.assertEqual(report["recommended_level"], 5)
-        self.assertIn("PCH_Temp: BMC threshold alarm", report["emergencies"])
+        self.assertIn("Inlet_Temp: BMC threshold alarm", report["bmc_alarms"])
+        self.assertIn("Inlet_Temp: BMC threshold alarm", report["emergencies"])
+        for count, now in enumerate((15, 30, 45, 60), 1):
+            report = engine.update(readings, now, now)
+            self.assertEqual(report["recommended_level"], 5)
+            self.assertEqual(report["recovery"]["healthy_samples"], count)
+        report = engine.update(readings, 75, 75)
+        self.assertEqual(report["recommended_level"], 1)
+        self.assertFalse(report["recovery"]["holding"])
+
+    def test_missing_bmc_limits_status_alarms_and_manual_override(self):
+        readings, _ = parse_sensors(OBSERVED)
+        for name, value, expected in (("pch_temp", 74, 3), ("inlet_temp", 42, 1)):
+            for limits, status, alarm in (
+                ((None, None, None), "ok", False),
+                ((None, value, None), "ok", True),
+                ((None, None, value), "ok", True),
+                ((None, None, None), "cr", True),
+            ):
+                with self.subTest(name=name, limits=limits, status=status):
+                    sample = dict(readings)
+                    sample[name] = replace(sample[name], value=value, status=status,
+                                           upper_warning=limits[0], upper_critical=limits[1],
+                                           upper_nonrecoverable=limits[2])
+                    report = ThermalEngine(load_config()).update(sample, 0, 0)
+                    protecting = alarm and name == "inlet_temp"
+                    self.assertEqual(bool(report["bmc_alarms"]), alarm)
+                    self.assertEqual(bool(report["emergencies"]), protecting)
+                    self.assertEqual(report["recommended_level"], 5 if protecting else expected)
+                    self.assertEqual(report["recovery"]["holding"], protecting)
+        config = load_config()
+        self.assertTrue(all(policy["emergency_celsius"] is None for policy in config["sensors"].values()))
+        config["sensors"]["PCH_Temp"]["emergency_celsius"] = 63
+        report = ThermalEngine(config).update(readings, 0, 0)
+        self.assertEqual(report["emergencies"], ["PCH_Temp: configured emergency temperature"])
+        self.assertEqual(report["bmc_alarms"], [])
+        self.assertEqual(report["recommended_level"], 5)
 
 
 if __name__ == "__main__":

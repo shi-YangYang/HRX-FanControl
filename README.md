@@ -29,8 +29,11 @@ sudo .venv/bin/hrx-fancontrol --once
 sudo .venv/bin/hrx-fancontrol
 ```
 
-The default interval is 10 seconds. Press Ctrl+C to stop.
-The initial L5 recommendation is a startup hold: 60 seconds of healthy samples are required before it can decrease.
+The target interval is 15 seconds; a failed collection waits another 15 seconds before retrying.
+Sensor reads have a 20-second timeout; status reads have a separate 3-second timeout. Ctrl+C cancels the active read and stops.
+The first valid sample determines the recommendation immediately; while waiting for data, no level is assumed. After a fault, five consecutive healthy samples release the hold. Thermal downshifts still require the configured 60-second cooldown and 3°C margin.
+Brief read failures hold the previous recommendation. Five consecutive failures or 300 seconds without a valid sensor sample set a floor of L3; an existing L4/L5 is kept. Sensors with a curve follow that curve. BMC alarms on sensors without a curve, and fan faults, still immediately recommend L5.
+Entering L5 from any source prints one terminal warning. It repeats only after leaving and re-entering L5. BMC details remain in diagnostic logs without separate notifications.
 
 Replay the supplied snapshot without a BMC or ipmitool:
 

@@ -2,7 +2,7 @@
 controller:
   enabled: false
   mode: dry-run
-  poll_interval_seconds: 10
+  poll_interval_seconds: 15
 
 fan:
   # Policy labels only. No verified conversion to CLI bytes or physical RPM exists yet.
@@ -34,12 +34,16 @@ safety:
   ipmi_failure_action: stop_lowering
   verify_fan_rpm: true
   safe_level: 5  # Recommendation only; effectiveness has NOT been validated.
-  recovery_delay_seconds: 60
+  read_failure_count: 5
+  read_failure_timeout_seconds: 300
+  read_failure_level: 3
+  recovery_success_count: 5
   sensor_timeout_seconds: 30
 
 ipmi:
   interface: open
-  command_timeout_seconds: 3
+  command_timeout_seconds: 20
+  status_timeout_seconds: 3
   read_control_status: true
 
 # Four inclusive entry temperatures for L2, L3, L4, L5.
@@ -56,22 +60,23 @@ curves:
   # The observed Outlet 44 C can also recover to L1 after a temperature excursion.
   outlet: [47, 52, 58, 65]
 
-# Emergency thresholds below initially equal each component's L5 threshold.
-# null curve = monitor only; BMC threshold alarms still trigger safety mode.
+# BMC thresholds come from each sample, not these policy curves.
+# With a curve, BMC alarms are reported without forcing a level or recovery hold.
+# Without a curve, BMC alarms recommend L5. emergency_celsius is an optional manual override.
 sensors:
   Inlet_Temp: {curve: null, critical: true, emergency_celsius: null, minimum: -20, maximum: 100, reject_zero: false}
-  Outlet_Temp: {curve: outlet, critical: true, emergency_celsius: 65, minimum: -20, maximum: 150, reject_zero: false}
-  CPU1_Temp: {curve: cpu, critical: true, emergency_celsius: 80, minimum: -20, maximum: 150, reject_zero: false}
-  CPU2_Temp: {curve: cpu, critical: true, emergency_celsius: 80, minimum: -20, maximum: 150, reject_zero: false}
-  PCH_Temp: {curve: pch, critical: true, emergency_celsius: 80, minimum: -20, maximum: 150, reject_zero: false}
-  DIMMG1_Temp: {curve: dimm, critical: true, emergency_celsius: 70, minimum: -20, maximum: 150, reject_zero: false}
-  DIMMG2_Temp: {curve: dimm, critical: true, emergency_celsius: 70, minimum: -20, maximum: 150, reject_zero: false}
-  CPU1_VR_Temp: {curve: vrm, critical: true, emergency_celsius: 100, minimum: -20, maximum: 150, reject_zero: false}
-  CPU2_VR_Temp: {curve: vrm, critical: true, emergency_celsius: 100, minimum: -20, maximum: 150, reject_zero: false}
-  NIC_Temp: {curve: nic, critical: true, emergency_celsius: 85, minimum: -20, maximum: 150, reject_zero: false}
-  PSU1_Temp: {curve: psu, critical: true, emergency_celsius: 60, minimum: -20, maximum: 150, reject_zero: false}
+  Outlet_Temp: {curve: outlet, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  CPU1_Temp: {curve: cpu, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  CPU2_Temp: {curve: cpu, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  PCH_Temp: {curve: pch, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  DIMMG1_Temp: {curve: dimm, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  DIMMG2_Temp: {curve: dimm, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  CPU1_VR_Temp: {curve: vrm, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  CPU2_VR_Temp: {curve: vrm, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  NIC_Temp: {curve: nic, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
+  PSU1_Temp: {curve: psu, critical: true, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
   CPU1_DTS: {curve: null, critical: false, emergency_celsius: null, minimum: -128, maximum: 150, reject_zero: false}
   CPU2_DTS: {curve: null, critical: false, emergency_celsius: null, minimum: -128, maximum: 150, reject_zero: false}
   NVME_Temp: {curve: null, critical: false, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: false}
   RAID_Temp: {curve: null, critical: false, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: true}
-  PSU2_Temp: {curve: psu, critical: false, emergency_celsius: 60, minimum: -20, maximum: 150, reject_zero: true}
+  PSU2_Temp: {curve: psu, critical: false, emergency_celsius: null, minimum: -20, maximum: 150, reject_zero: true}

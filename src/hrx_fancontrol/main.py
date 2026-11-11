@@ -6,27 +6,39 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
+from .collection import CollectionStats, collect, poll_wait_seconds, timestamp
 from .config import ConfigError, load_config
-from .ipmi import ReadOnlyIPMI, parse_control_status
+from .ipmi import CollectionCancelled, ReadOnlyIPMI
 from .logger import AsyncLogger, transition_key
-from .sensors import parse_sensors
 from .thermal_engine import ThermalEngine
 
 
-def timestamp():
-    return datetime.now(timezone.utc).isoformat()
+L5_ALERT = "警告：当前建议档位已达到 L5。"
 
 
 def render(report):
+    available = report["component_level"] is not None
+    demand = (f"Component demand L{report['component_level']}" if available else
+              "Component demand unavailable")
+    level = report["recommended_level"]
+    recommendation = ("Waiting for valid sensor data; no recommendation" if level is None else
+                      f"recommendation L{level} (policy target {report['policy_target_percent']}%, uncalibrated)")
     lines = [f"{report['timestamp']}  DRY-RUN — no fan settings applied",
-             f"Component demand L{report['component_level']}; recommendation "
-             f"L{report['recommended_level']} (policy target {report['policy_target_percent']}%, uncalibrated) "
-             f"[{report['safety_state']}]",
+             f"{demand}; {recommendation} [{report['safety_state']}]",
              "IPMI argument: unresolved; expected RPM: unresolved; no encoding conversion performed",
              f"{'Sensor':<18} {'Celsius':>8} {'Level':>7} {'C/min':>8}  State"]
+    failure = report.get("read_failure")
+    if failure:
+        lines.insert(3, f"Read failures: {failure['consecutive_failures']}/{failure['count_threshold']}; "
+                     f"last valid sample age {failure['no_valid_sample_seconds']:.1f}/"
+                     f"{failure['time_threshold_seconds']} s; "
+                     f"fallback floor L{failure['fallback_level']}; "
+                     f"trigger: {', '.join(failure['trigger_reasons']) or 'none'}")
+    recovery = report.get("recovery")
+    if recovery and recovery["holding"]:
+        lines.insert(-1, f"Recovery: {recovery['healthy_samples']}/{recovery['required_samples']} healthy samples")
     for name, sensor in report["sensors"].items():
         value = "--" if sensor["celsius"] is None else f"{sensor['celsius']:.1f}"
         level = "--" if sensor["requested_level"] is None else f"L{sensor['requested_level']}"
@@ -37,47 +49,9 @@ def render(report):
         lines.append(f"{name}: {fan['rpm'] if fan['rpm'] is not None else '--'} RPM  {fan['error'] or 'ok'}")
     raw = report["bmc"]["raw_bytes"]
     lines.append(f"BMC raw bytes: {' '.join(raw) if raw else 'unavailable / not read'}; mode and percentage unverified")
-    for message in report["faults"] + report["emergencies"]:
-        lines.append(f"ALERT: {message}")
+    for message in report["faults"]:
+        lines.append(f"Diagnostic: {message}")
     return "\n".join(lines)
-
-
-def collect(ipmi, engine, config, source=None, on_alert=None):
-    sampled_at = time.monotonic()
-    previous_level = engine.safety.previous_level
-    commands, errors = [], []
-    if source is not None:
-        text = source
-    else:
-        result = ipmi.sensors()
-        commands.append(result.summary())
-        text = result.stdout
-        if result.error or result.stderr:
-            errors.append(result.error or f"IPMI sensor diagnostic: {result.stderr}")
-    readings, parse_errors = parse_sensors(text)
-    errors.extend(parse_errors)
-    report = engine.update(readings, time.monotonic(), sampled_at, errors)
-    report.update(timestamp=timestamp(), source="offline-snapshot" if source is not None else "local-openipmi",
-                  commands=commands, bmc={"raw_bytes": None, "mode": "unverified", "percent": None})
-    # Publish detected thermal/fan emergencies before waiting on the optional status query.
-    if on_alert and (report["faults"] or report["emergencies"]):
-        on_alert(report)
-    if source is None and config["ipmi"]["read_control_status"]:
-        result = ipmi.control_status()
-        commands.append(result.summary())
-        try:
-            if result.error or result.stderr:
-                raise ValueError(result.error or result.stderr)
-            report["bmc"]["raw_bytes"] = parse_control_status(result.stdout)
-        except ValueError as exc:
-            report["faults"].append(f"BMC status: {exc}")
-            # A failed readback must not undo a previously held higher recommendation.
-            engine.safety.previous_level = max(previous_level, engine.safety.previous_level)
-            level, state = engine.safety.update(report["component_level"], report["faults"],
-                                                 report["emergencies"], time.monotonic())
-            report.update(recommended_level=level, safety_state=state,
-                          policy_target_percent=config["fan"]["levels"][level - 1])
-    return report
 
 
 def main(argv=None):
@@ -101,29 +75,32 @@ def main(argv=None):
         source = args.input.read_text(encoding="utf-8") if args.input else None
         logger = AsyncLogger(config["logging"])
         engine = ThermalEngine(config)
-        ipmi = ReadOnlyIPMI(config["ipmi"]["command_timeout_seconds"])
+        stats = CollectionStats()
+        ipmi = ReadOnlyIPMI(config["ipmi"]["command_timeout_seconds"],
+                            config["ipmi"]["status_timeout_seconds"], stop)
         for sig in (signal.SIGINT, signal.SIGTERM):
             handlers[sig] = signal.signal(sig, lambda *_: stop.set())
-        previous_key, previous_alert = None, None
+        previous_key, l5_notified = None, False
         last_log = float("-inf")
 
         def alert(report):
-            nonlocal previous_alert
-            key = (tuple(report["faults"]), tuple(report["emergencies"]))
-            if key != previous_alert:
-                print("DRY-RUN ALERT: " + "; ".join(report["faults"] + report["emergencies"]),
-                      file=sys.stderr, flush=True)
+            nonlocal l5_notified
+            if report["recommended_level"] == 5 and not l5_notified:
+                print(L5_ALERT, file=sys.stderr, flush=True)
                 # Serialize now so later readback changes cannot mutate the queued record.
                 logger.emit(json.loads(json.dumps({"event": "safety_alert", **report})))
-                previous_alert = key
+                l5_notified = True
 
         while not stop.is_set():
             start = time.monotonic()
-            report = collect(ipmi, engine, config, source, alert)
-            if report["faults"] or report["emergencies"]:
+            try:
+                report = collect(ipmi, engine, config, source, alert, stop, stats)
+            except CollectionCancelled:
+                break
+            if report["recommended_level"] == 5:
                 alert(report)
             else:
-                previous_alert = None
+                l5_notified = False
             report["logging_health"] = {"dropped_records": logger.dropped, "error": logger.error}
             key = transition_key(report)
             now = time.monotonic()
@@ -135,11 +112,17 @@ def main(argv=None):
             print(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report), flush=True)
             if logger.error or logger.dropped:
                 print(f"Logging degraded: {logger.error or 'queue overflow'}; dropped={logger.dropped}", file=sys.stderr)
-            exit_code = 2 if report["faults"] or report["emergencies"] else 0
+            exit_code = 2 if report["recommended_level"] == 5 or report["faults"] or report["emergencies"] else 0
             if args.once:
                 break
-            stop.wait(max(0, config["controller"]["poll_interval_seconds"] - (time.monotonic() - start)))
-        logger.emit({"event": "shutdown", "timestamp": timestamp(), "mode": "dry-run", "applied": False})
+            stop.wait(poll_wait_seconds(report, config["controller"]["poll_interval_seconds"],
+                                       time.monotonic() - start))
+        if stop.is_set():
+            exit_code = 0
+        logger.emit({"event": "shutdown", "timestamp": timestamp(), "mode": "dry-run", "applied": False,
+                     "run_id": stats.run_id, "poll_id": stats.started,
+                     "collection_counts": stats.snapshot(),
+                     "reason": "requested" if stop.is_set() else "once"})
     except (ConfigError, OSError, ValueError) as exc:
         print(f"hrx-fancontrol: {exc}", file=sys.stderr)
         exit_code = 1
