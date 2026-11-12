@@ -227,49 +227,51 @@ ipmitool 1.8.19 的上游解析中，裸参数 `15` 对应字节 `0x0f`，`0x15`
 
 ```sh
 sudo .venv/bin/hrx-fancontrol --calibrate calibration.json
-sudo .venv/bin/hrx-fancontrol --auto --profile calibration.json
-sudo .venv/bin/hrx-fancontrol --manual-level 2 --profile calibration.json
+sudo .venv/bin/hrx-fancontrol --serve --profile calibration.json
 ```
 
 `--calibrate` 的路径必须尚不存在，父目录须可写。程序先取得完整健康采样，再按 L5→L1 写入；降低前检查温度需求、故障及恢复保持。每档写后至少等待 10 秒，收集三次间隔至少 5 秒的连续稳定新样本（默认轮次之间等待 15 秒），六个 RPM 和手动模式/duty 字节都保存在 JSON。每档等待最多 180 秒；期间需求超过当前档位时立即升档并中止校准。
 
 各风扇的稳定分布须逐档递增。容差由测量范围扩展 15%（至少 200 RPM），再按相邻实测均值的中点裁剪，防止旧档 RPM 被认作新档；测量范围跨过中点时拒绝资料。完整五档成功后才原子发布文件，既有文件不会覆盖。取消或失败不生成完整资料；事件日志保留已测步骤。校准完成/正常取消均保持最后设置。
 
-自动控制采用原曲线，手动控制取 `max(手动下限, 当前策略)`。无有效数据不猜 L1，初次有效数据直接决定档位；已有回读和 RPM 符合目标时先验证而不重复发送。更高需求可打断低档验证，但实际写入前先核对外部变化；已有确认目标时，每次写入前额外读回一次状态，最多等待 3 秒。
-
-例如 `--manual-level 2` 是持续运行的最低档位设置：
-
-| 曲线当前需要 | 自动模式 | 手动最低 L2 |
-|---|---|---|
-| L1 | L1 | L2 |
-| L2 | L2 | L2 |
-| L4 | L4 | L4 |
-
-温度回落后仍按原有回差规则降档，手动模式最低回到 L2。调整下限需停止当前进程，再用新的 `--manual-level` 启动；日常自动运行直接用 `--auto`。
-
-`pending-verification` 表示已发送、等待写后新样本；`verified` 需手动模式、六槽匹配和三次新 RPM 在同机范围内。原轮次或写前数据不作确认。验证使用后续串行采样，不额外开并行读取，也不停掉温度监测来等待三次样本；更高温度需求在当前命令结束后处理。
-
-短暂读取失败按原 5 次/300 秒规则保持或至少 L3，原有 L4/L5 不降低。执行异常（明确写失败、尚未确认过的新设置回读不符或连续三次有效新 RPM 不符）则停止常规控制，统一最多尝试一次固定 L3 兜底；之前在 L4/L5 也采用 L3。兜底验证最多约 90 秒加一轮读取，结果如实记录，整体仍失败退出。正常温度曲线、关键温度缺失及无曲线温度告警仍可要求 L5。未完成首次校准时没有可比较的 L3 RPM 范围，只能记录部分读回验证，不能声称已校准验证。
-
-**已确认的 BMC 模式或六个风扇参数后来被改变，程序就让位。** 自动、手动和校准都停止写入，只记录一次“检测到外部修改，已停止自动调速”，不执行兜底、不恢复 BMC、不通过服务重启抢回控制。温度需求升高也不能覆盖已经检测到的外部设置。单纯 RPM 波动或读取超时不算外部修改。程序无法识别修改者，也无法保证发现两次读取之间改后恢复、改成相同值，或恰好发生在读回与写入之间的操作。
-
-`controller.enabled: false` / `mode: dry-run` 保持原配置约束，只有明确 CLI 选项开启写模式；不能仅靠 YAML 意外激活。控制必须开启状态读回、使用既定六风扇及五档标签，采样间隔 5～15 秒、新鲜度不超过 30 秒、sensor/status 超时不超过 20/3 秒。`--once`、`--input` 不能与写模式混用，校准与自动/手动互斥。
-
-三种写模式与服务恢复共用 `/run/hrx-fancontrol/writer.lock`，只限制本项目进程。`/var/lib/hrx-fancontrol/owner.json` 保存身份、目标、确认结果及让位状态，让位状态在重启后仍保留。Ctrl+C/SIGTERM 不增加写入、不恢复 BMC，停止后温度策略不再运行。若停止时写入尚未返回，会记录 `write-in-flight-unknown`。正常停止时日志/标记清理出错返回 78 并输出诊断，服务将其视为正常停止，不能转成异常兜底。
-
-执行日志增加 `control.target_level`、`byte`、`status`、`stable_samples` 与 `verified`。推荐、发送、读回与实测验证分别表达；`applied: true` 只表示当时完整验证。写入/验证变化即时记录，`--json` 另含完整命令详情。退出码为 0（完成/正常停止）、1（启动或执行失败）、78（正常停止但清理/日志有错误）、79（已让位或等待主动恢复）；策略 L5 本身不令服务失败退出。
-
-主动重新启用，在原控制命令后加 `--resume-control`：
+服务常驻后，在另一个 SSH 终端操作：
 
 ```sh
-sudo .venv/bin/hrx-fancontrol --auto --profile calibration.json --resume-control
+sudo .venv/bin/hrx-fancontrol auto on
+sudo .venv/bin/hrx-fancontrol auto off
+sudo .venv/bin/hrx-fancontrol manual 25
+sudo .venv/bin/hrx-fancontrol status
+sudo .venv/bin/hrx-fancontrol --json status
 ```
 
-程序会在身份、校准检查通过并取得进程锁后清除本机让位状态。使用服务时，先 `sudo systemctl stop hrx-fancontrol`，再用 `/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --auto --profile /etc/hrx-fancontrol/calibration.json --resume-control` 加 `sudo` 前台恢复，确认后按 Ctrl+C，最后 `sudo systemctl start hrx-fancontrol`。不要把 `--resume-control` 写入服务模板；普通 start/restart 不会清除让位状态。
+安装为系统服务后，将上述 `.venv/bin/hrx-fancontrol` 换成 `/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol`。
+
+| 指令 | 作用 |
+|---|---|
+| `auto on` | 开启周期采样，使用新鲜数据按五档曲线自动调控；主动恢复已让位的控制 |
+| `auto off` | 关闭新的周期采样和调控，保留风扇当前设置，服务继续接收指令 |
+| `manual N` | 先关闭自动，再设置十进制整数1～100；温度曲线不改变此固定值 |
+| `status` | 查看自动开关、手动目标、执行确认状态和最近读数的时间；缓存不是实时采样 |
+
+例如 `manual 25` 写入字节 `0x19`，`manual 100` 写入 `0x64`；不接受十六进制写法、小数或范围外参数，也不把它们当作 RPM 百分比。原 `--manual-level` 最低档位模式已删除。`--auto` 仅保留为 `--serve` 的兼容入口，不覆盖保存的关闭状态。
+
+第一次启动服务默认自动运行。`auto off` 或 `manual` 后，模式保存到 `/var/lib/hrx-fancontrol/service-mode.json`；服务或服务器重启后仍关闭自动，且不重新发送保存的手动值。BMC 可能被其他程序或重启改变，保存的目标只是操作意图；重新设置请明确发送 `manual N`。
+
+手动指令返回“命令已返回，等待验证”后，服务只进行最多约90秒加一轮读取的写后验证，然后停止采样。所有IPMI命令串行运行，sensor超时20秒，状态/写入各3秒；新指令等待当前调用结束。队列中的关闭/手动会优先于旧采样产生的自动写入。客户端等待最多60秒，不自动重发；超时提示结果未知，应先用 `status` 核对。
+
+`pending-verification` 表示命令已发送。BMC确认需手动模式与六个槽位参数匹配；五个已校准参数还需三次写后新RPM符合同机范围，才标为 `verified`。其他参数只标为 `readback-confirmed-rpm-uncalibrated`，不插值或伪造RPM范围。手动验证不使用温度曲线升档；自动重新开启时使用新策略时钟，不把暂停期间算作采样失败。
+
+自动模式保留原曲线与5次/300秒读取失败规则。真实执行失败仍最多尝试一次固定L3，再以失败退出；手动操作完成、主动关闭或外部接管后不兜底改速。服务恢复同时检查持久模式、当前invocation和活动操作标记，只有尚在执行/验证的手动操作才可能恢复，空闲手动模式不会因崩溃而写L3。
+
+**已确认的 BMC 模式或六槽参数被改变后，程序让位并停止写入。** 服务仍接收指令，但普通重启不会抢回控制；明确 `auto on` 或 `manual N` 才代表新的主动控制意图。单纯RPM波动或读取超时不算外部修改；暂停后没有周期采样，也无法实时发现外部变化。读写间竞态、改成相同值或两次读取间改后恢复不能保证检测。
+
+客户端通过 `/run/hrx-fancontrol/control.sock` 交给唯一服务执行，不直接操作BMC。socket仅服务用户可访问，服务停止时指令明确报不可连接。服务、校准和恢复共用writer.lock；默认无控制选项仍只读，`--once`/`--input`不能与服务或校准混用。同机身份/profile校验保留，原owner记录中的确认与让位证据继续有效。
+
+Ctrl+C/SIGTERM或正常停止服务保持最后设置，不恢复BMC自动模式。写入途中取消可能留下未知状态，日志如实记录。校准仍需停止服务后运行；此前已让位时，可给 `--calibrate` 加 `--resume-control` 明确恢复校准权限，此选项不用于服务启动。
 
 ## systemd 服务
 
-先完成前台校准，再安装随附模板。以下在服务器执行，源码放 `/opt/hrx-fancontrol`，YAML 与同机校准放 `/etc/hrx-fancontrol`，日志放 `/var/log/hrx-fancontrol`。最后的 `enable --now` 会立即启动自动调速，并设置开机自启。
+先完成前台校准，再安装随附模板。以下在服务器执行，源码放 `/opt/hrx-fancontrol`，YAML 与同机校准放 `/etc/hrx-fancontrol`，日志放 `/var/log/hrx-fancontrol`。最后的 `enable --now` 启动常驻服务并设置开机自启；首次启动默认自动，后续遵守保存的模式。
 
 ```sh
 sudo mkdir -p /opt/hrx-fancontrol /etc/hrx-fancontrol
@@ -298,9 +300,9 @@ sudo systemctl restart hrx-fancontrol    # 重启服务
 sudo systemctl disable --now hrx-fancontrol  # 停止并取消开机自启
 ```
 
-更新源码前先停服务，安装后再启动。外部接管后的暂停状态会跨服务/系统重启保留，需按上节明确恢复；普通 `start/restart` 不会抢回控制。
+更新源码前先停服务，重新安装程序与服务模板，执行 `sudo systemctl daemon-reload` 后再启动。外部接管后的暂停状态会跨服务/系统重启保留，需按上节明确恢复；普通 `start/restart` 不会抢回控制。
 
-服务有 90 秒看门狗，只有采样等实际进展才发送通知；异常退出最多每十分钟重启三次。`ExecStopPost` 只有异常服务结果、当前 invocation 的有效接管标记、同机有效校准且未尝试过兜底时，持同一锁尝试一次 L3。恢复前也核对外部变化；尚未核实控制权时不写，发现变化后让位，后续自动启动不能再写。正常停止、启动失败未接管、旧进程标记、已做过兜底都不写入。`RuntimeDirectoryPreserve=yes` 保留锁的 inode，`StateDirectory` 保存跨重启的让位状态。程序不会自行安装或启用模板。
+服务有 90 秒看门狗，由主事件循环发送进展通知（包括有意暂停时的空闲循环），不会用独立心跳线程掩盖卡住的IPMI；异常退出最多每十分钟重启三次。`ExecStopPost` 只有异常服务结果、当前 invocation 的有效接管标记、同机有效校准且未尝试过兜底时，持同一锁尝试一次 L3。恢复前也核对外部变化；尚未核实控制权时不写，发现变化后让位，后续自动启动不能再写。正常停止、启动失败未接管、旧进程标记、已做过兜底都不写入。`RuntimeDirectoryPreserve=yes` 保留锁的 inode，`StateDirectory` 保存跨重启的让位状态。程序不会自行安装或启用模板。
 
 前台 SIGKILL、机器断电、BMC 不响应或服务恢复程序无法运行时，都不能保证执行保护；此软件不替代硬件热保护。实机校准、服务重启和满载散热须在目标服务器验证。
 

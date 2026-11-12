@@ -172,25 +172,17 @@ class ActuatorTests(unittest.TestCase):
         self.assertEqual(self.executor.confirmations, 0)
         self.assertEqual([call.args[0] for call in self.ipmi.set_level.call_args_list], [1, 5])
 
-    def test_manual_floor_cannot_override_hot_policy(self):
-        self.executor.update(report(1, recommended=4), manual_level=2)
-        self.ipmi.set_level.assert_called_once_with(4)
-
-    def test_collected_fan_fault_executes_l3_or_higher_manual_floor(self):
+    def test_collected_fan_fault_executes_l3(self):
         config = load_config()
-        for manual, target in ((None, 3), (4, 4)):
-            with self.subTest(manual=manual):
-                self.setUp()
-                self.ipmi.sensors.return_value = CommandResult(
-                    ("sensor",), SAMPLE.replace("3335.000", "0.000"), "", 0, None, .1)
-                alerts = []
-                with patch("hrx_fancontrol.collection.time.monotonic", return_value=self.now):
-                    data = collect(self.ipmi, ThermalEngine(config), config, on_alert=alerts.append)
-                self.assertEqual(data["recommended_level"], 3)
-                self.assertEqual(alerts, [])
-                self.executor.update(data, manual_level=manual)
-                self.ipmi.set_level.assert_called_once_with(target)
-                self.assertEqual(self.executor.status, "pending-verification")
+        self.ipmi.sensors.return_value = CommandResult(
+            ("sensor",), SAMPLE.replace("3335.000", "0.000"), "", 0, None, .1)
+        alerts = []
+        with patch("hrx_fancontrol.collection.time.monotonic", return_value=self.now):
+            data = collect(self.ipmi, ThermalEngine(config), config, on_alert=alerts.append)
+        self.assertEqual(data["recommended_level"], 3)
+        self.assertEqual(alerts, [])
+        self.executor.update(data)
+        self.ipmi.set_level.assert_called_once_with(3)
 
     def test_already_matching_physical_setting_does_not_rewrite(self):
         for at in (100, 115, 130):
@@ -527,7 +519,7 @@ class LifecycleTests(unittest.TestCase):
         from argparse import Namespace
         for aborted in (False, True):
             with self.subTest(aborted=aborted), tempfile.TemporaryDirectory() as tmp:
-                args = Namespace(calibrate=Path(tmp) / "p.json", auto=False, manual_level=None,
+                args = Namespace(calibrate=Path(tmp) / "p.json", auto=False,
                                  service_recover=False, profile=None, json=True)
                 config = load_config()
                 config["logging"]["enabled"] = False
@@ -587,7 +579,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.json"
             publish_profile(path, profile())
-            args = Namespace(calibrate=None, auto=True, manual_level=None, service_recover=False,
+            args = Namespace(calibrate=None, auto=True,  service_recover=False,
                              profile=path, json=True)
             config = load_config()
             config["logging"]["enabled"] = False
@@ -608,7 +600,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.json"
             publish_profile(path, profile())
-            args = Namespace(calibrate=None, auto=True, manual_level=None, service_recover=False,
+            args = Namespace(calibrate=None, auto=True,  service_recover=False,
                              profile=path, json=True)
             config = load_config()
             config["logging"]["enabled"] = False
@@ -632,7 +624,7 @@ class LifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.json"
             publish_profile(path, profile())
-            args = Namespace(calibrate=None, auto=True, manual_level=None, service_recover=False,
+            args = Namespace(calibrate=None, auto=True,  service_recover=False,
                              profile=path, json=True)
             config = load_config()
             config["logging"]["enabled"] = False
@@ -784,15 +776,14 @@ class ExternalOverrideTests(unittest.TestCase):
         return executor, ipmi
 
     def test_override_precedes_target_change_even_with_failed_temperature(self):
-        for target, manual, failed, mode_changed in ((2, None, False, False), (5, None, False, False),
-                                                    (1, 5, False, False), (None, None, True, False),
-                                                    (1, None, False, True)):
-            with self.subTest(target=target, manual=manual, failed=failed, mode=mode_changed):
+        for target, failed, mode_changed in ((2, False, False), (5, False, False),
+                                           (None, True, False), (1, False, True)):
+            with self.subTest(target=target, failed=failed, mode=mode_changed):
                 executor, ipmi = self.executor()
                 data = report(2, recommended=target, status="failed" if failed else "ok")
                 data["bmc"]["raw_bytes"] = raw(1, "0x21") if mode_changed else raw(2)
                 with self.assertRaises(ExternalOverride):
-                    executor.update(data, manual)
+                    executor.update(data)
                 self.assertEqual(executor.status, "external-override")
                 with self.assertRaises(ExternalOverride):
                     executor.request(5)
@@ -840,14 +831,22 @@ class ExternalOverrideTests(unittest.TestCase):
         if not path.exists():
             publish_profile(path, profile())
         args = Namespace(calibrate=Path(tmp) / "new.json" if mode == "calibrate" else None,
-                         auto=mode == "auto", manual_level=2 if mode == "manual" else None,
+                         auto=mode == "auto",
                          service_recover=mode == "recovery", profile=None if mode == "calibrate" else path,
                          json=True, resume_control=resume)
         config = load_config()
         config["logging"]["enabled"] = False
         if logger is None:
             logger = Mock(error=None, dropped=0)
-        with patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
+        def bounded_service(controller, server):
+            for _ in range(10):
+                if controller.state.data["mode"] != "automatic":
+                    raise CollectionCancelled()
+                controller.next_poll = 0
+                controller.tick(server)
+            raise AssertionError("Service test did not reach cancellation or suspension")
+        with patch("hrx_fancontrol.service.ServiceController.run", bounded_service), \
+             patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
              patch("hrx_fancontrol.control_runtime.ControlIPMI", return_value=ipmi), \
              patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
              patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
@@ -855,14 +854,14 @@ class ExternalOverrideTests(unittest.TestCase):
              patch("hrx_fancontrol.control_runtime.AsyncLogger", return_value=logger), \
              patch("hrx_fancontrol.control_runtime.format_log_record", side_effect=lambda data, *args: data), \
              patch("hrx_fancontrol.control_runtime.transition_key", return_value=()), \
-             patch.object(threading.Event, "wait", return_value=False), \
+             patch("hrx_fancontrol.control_runtime.fallback", side_effect=lambda ex, collect_next, wait, emit: fallback(ex, collect_next, lambda _: None, emit)), \
              patch("sys.stdout", new_callable=io.StringIO) as output, \
              patch("sys.stderr", new_callable=io.StringIO):
             code = run_control(args, config)
         return code, [json.loads(line) for line in output.getvalue().splitlines()]
 
     def test_runtime_high_temperature_yields_once_and_requires_explicit_resume(self):
-        for mode, initial in (("auto", 1), ("manual", 2)):
+        for mode, initial in (("auto", 1),):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 ipmi = Mock()
                 ipmi.set_level.return_value = success()
@@ -877,12 +876,12 @@ class ExternalOverrideTests(unittest.TestCase):
                     ipmi.set_level.assert_not_called()  # Early alarm cannot preempt the raw read.
                     return report(3, 115, recommended=5)
                 code, events = self.run_with(tmp, ipmi, mode=mode, collect_impl=collect_impl)
-                self.assertEqual(code, OVERRIDE_EXIT_STATUS)
+                self.assertEqual(code, 0)  # Service stays alive paused until the test cancels it.
                 self.assertEqual(sum(event.get("event") == "external_override" for event in events), 1)
                 marker = json.loads((Path(tmp) / "run/owner.json").read_text())
                 self.assertTrue(marker["yielded"])
                 self.assertFalse(marker["active"])
-                self.assertEqual(self.run_with(tmp, ipmi)[0], OVERRIDE_EXIT_STATUS)
+                self.assertEqual(self.run_with(tmp, ipmi)[0], 0)
                 self.assertEqual(self.run_with(tmp, ipmi, resume=True)[0], 0)
                 self.assertFalse(json.loads((Path(tmp) / "run/owner.json").read_text())["yielded"])
                 ipmi.set_level.assert_not_called()
@@ -908,7 +907,7 @@ class ExternalOverrideTests(unittest.TestCase):
                     # Emulate systemd starting a fresh invocation after failed ExecStopPost.
                     with patch.dict(os.environ, {"INVOCATION_ID": "two"}):
                         self.assertEqual(self.run_with(tmp, ipmi, collect_impl=lambda *a, **kw: report(1))[0],
-                                         OVERRIDE_EXIT_STATUS)
+                                         OVERRIDE_EXIT_STATUS if disk_failed else 0)
                 ipmi.set_level.assert_not_called()
 
     def test_yield_exit_survives_log_emit_close_and_marker_errors(self):
@@ -951,7 +950,7 @@ class ExternalOverrideTests(unittest.TestCase):
 
     def test_failed_yield_persistence_then_missing_status_never_reclaims_control(self):
         timeout = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
-        for mode in ("auto", "manual", "calibrate", "recovery"):
+        for mode in ("auto", "calibrate", "recovery"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp, \
                  patch.dict(os.environ, {"INVOCATION_ID": "one", "SERVICE_RESULT": "signal"}, clear=True):
                 directory = Path(tmp) / "run"
@@ -987,7 +986,8 @@ class ExternalOverrideTests(unittest.TestCase):
                 # Once a read succeeds, the external setting is recognized, never overwritten.
                 ipmi.control_status.return_value = status_result(1)
                 self.assertEqual(self.run_with(tmp, ipmi, mode=mode,
-                                               collect_impl=[report(1, recommended=5)])[0], OVERRIDE_EXIT_STATUS)
+                                               collect_impl=[report(1, recommended=5)])[0],
+                                 0 if mode == "auto" else OVERRIDE_EXIT_STATUS)
                 self.assertTrue(json.loads(owner.path.read_text())["yielded"])
                 ipmi.set_level.assert_not_called()
 
@@ -1090,7 +1090,7 @@ class ExternalOverrideTests(unittest.TestCase):
         ipmi.set_level.assert_called_once_with(3)
 
     def test_runtime_modes_use_l3_fallback_and_keep_verification_honest(self):
-        for mode in ("auto", "manual", "calibrate"):
+        for mode in ("auto", "calibrate"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 now = [100]
                 ipmi = Mock()

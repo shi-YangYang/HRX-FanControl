@@ -13,8 +13,12 @@ class ControlIPMI(ReadOnlyIPMI):
     def set_level(self, level):
         if type(level) is not int or level not in LEVEL_BYTES:
             raise ValueError("Only calibrated HR650X levels 1..5 are supported")
+        return self.set_parameter(LEVEL_BYTES[level])
+
+    def set_parameter(self, parameter):
+        validate_parameter(parameter)
         return self._execute(("ipmitool", "-I", "open", "raw", "0x2e", "0x30", "0x00", "0x00",
-                              f"0x{LEVEL_BYTES[level]:02x}"), self.status_timeout)
+                              f"0x{parameter:02x}"), self.status_timeout)
 
 
 def decode_status(raw):
@@ -31,7 +35,21 @@ def decode_status(raw):
             "installed_duty_bytes": raw[1:7], "unused_duty_bytes": raw[7:9], "raw_bytes": raw[:]}
 
 
-def matches_level(raw, level):
+def validate_parameter(parameter):
+    if type(parameter) is not int or not 1 <= parameter <= 100:
+        raise ValueError("Manual parameter must be a decimal integer from 1 to 100")
+    return parameter
+
+
+def level_for_parameter(parameter):
+    return next((level for level, value in LEVEL_BYTES.items() if value == parameter), None)
+
+
+def matches_parameter(raw, parameter):
     status = decode_status(raw)
     return status["mode"] == "manual" and all(
-        int(value, 16) == LEVEL_BYTES[level] for value in status["installed_duty_bytes"])
+        int(value, 16) == parameter for value in status["installed_duty_bytes"])
+
+
+def matches_level(raw, level):
+    return matches_parameter(raw, LEVEL_BYTES[level])

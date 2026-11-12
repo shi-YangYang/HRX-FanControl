@@ -38,6 +38,10 @@ def render(report):
         lines[2] = (f"Control target {target}; byte {control['byte']}; "
                     f"fresh RPM confirmations {control['stable_samples']}/{control['required_samples']}; "
                     f"verified={control['verified']}")
+    if control and report["mode"] == "manual":
+        lines[1] = "Automatic sampling/control is off; manual parameter is fixed."
+        lines[2] = (f"Manual parameter {control.get('parameter')}; byte {control['byte']}; "
+                    f"BMC confirmed={control.get('bmc_confirmed', False)}; calibrated RPM verified={control['verified']}")
     failure = report.get("read_failure")
     if failure:
         lines.insert(3, f"Read failures: {failure['consecutive_failures']}/{failure['count_threshold']}; "
@@ -75,21 +79,45 @@ def main(argv=None):
     parser.add_argument("--no-log", action="store_true", help="disable local file logging")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--calibrate", type=Path, metavar="NEW_JSON", help="explicitly write L5 to L1 and save live machine calibration")
-    modes.add_argument("--auto", action="store_true", help="enable calibrated continuous automatic control")
-    modes.add_argument("--manual-level", type=int, choices=range(1, 6), help="continuous control with this level as a floor")
+    modes.add_argument("--auto", action="store_true", help="compatibility alias for --serve; saved off mode is respected")
+    modes.add_argument("--serve", action="store_true", help="run the local command service; remember the automatic mode")
     modes.add_argument("--service-recover", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--profile", type=Path, help="same-machine calibration JSON, required for automatic/manual control")
+    parser.add_argument("--profile", type=Path, help="same-machine calibration JSON, required for service control")
     parser.add_argument("--resume-control", action="store_true", help="explicitly resume control after an external override")
+    actions = parser.add_subparsers(dest="action")
+    auto_command = actions.add_parser("auto", help="switch service automatic control on/off")
+    auto_command.add_argument("setting", choices=("on", "off"))
+    manual_command = actions.add_parser("manual", help="set decimal parameter 1..100 and disable automatic control")
+    manual_command.add_argument("parameter")
+    actions.add_parser("status", help="show service mode and last observed readings")
     args = parser.parse_args(argv)
-    controlling = args.calibrate is not None or args.auto or args.manual_level is not None or args.service_recover
-    if args.resume_control and (not controlling or args.service_recover):
-        parser.error("--resume-control requires --auto, --manual-level, or --calibrate")
+    if args.action:
+        if args.calibrate or args.auto or args.serve or args.service_recover or args.profile or args.once or args.input or args.resume_control or args.config or args.no_log:
+            parser.error("Service commands cannot be combined with monitoring/control startup options")
+        from .commands import command_client, decimal_parameter
+        try:
+            command = {"action": args.setting if args.action == "auto" else args.action}
+            if args.action == "manual":
+                command["parameter"] = decimal_parameter(args.parameter)
+            result = command_client(command)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            else:
+                from .command_output import render_command
+                print(render_command(result))
+            return 0 if result["ok"] else 1
+        except (ValueError, OSError) as exc:
+            print(f"hrx-fancontrol: {exc}", file=sys.stderr)
+            return 1
+    controlling = args.calibrate is not None or args.auto or args.serve or args.service_recover
+    if args.resume_control and not args.calibrate:
+        parser.error("Use auto on/manual to resume the service; --resume-control is only for --calibrate")
     if controlling and (args.input or args.once):
         parser.error("Control/calibration cannot be combined with --input or --once")
-    if (args.auto or args.manual_level is not None or args.service_recover) and not args.profile:
-        parser.error("Automatic/manual/recovery control requires --profile")
+    if (args.auto or args.serve or args.service_recover) and not args.profile:
+        parser.error("Service/recovery control requires --profile")
     if args.profile and (not controlling or args.calibrate):
-        parser.error("--profile is only valid with --auto, --manual-level, or service recovery")
+        parser.error("--profile is only valid with --auto, --serve, or service recovery")
     if args.input and not args.once:
         parser.error("--input requires --once; replaying an unchanged file as fresh sensor data is unsafe")
     logger = None

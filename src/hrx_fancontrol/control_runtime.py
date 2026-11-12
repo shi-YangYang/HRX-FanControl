@@ -50,7 +50,7 @@ def fallback(executor, collect_next, wait, emit, clock=time.monotonic):
 def run_control(args, config):
     stop = threading.Event()
     logger = None
-    owner = executor = None
+    owner = executor = controller = None
     stats = CollectionStats()
     last_report = None
     previous_key, last_log = None, float("-inf")
@@ -77,7 +77,8 @@ def run_control(args, config):
         if event == "write_started":
             notify_l5(control.get("target_level"))
         record = {"schema_version": 2, "time": timestamp(), "event": event, "run_id": stats.run_id,
-                  "poll_id": stats.started, "source": "local-openipmi", "mode": mode,
+                  "poll_id": stats.started, "source": "local-openipmi",
+                  "mode": controller.state.data["mode"] if controller else mode,
                   "applied": control.get("verified", False),
                   "control": {key: value for key, value in control.items()
                               if key != "command" or value and (value.get("error") or value.get("returncode") != 0)},
@@ -123,7 +124,7 @@ def run_control(args, config):
             except OSError:
                 pass
 
-    mode = "calibration" if args.calibrate else "manual" if args.manual_level else "automatic"
+    mode = "calibration" if args.calibrate else "automatic"
     if args.service_recover:
         mode = "service-recovery"
         if not os.environ.get("INVOCATION_ID") or os.environ.get("SERVICE_RESULT") not in (
@@ -145,13 +146,21 @@ def run_control(args, config):
                     owner = Ownership.recover(state_directory, identity, profile)
                     if owner is None:
                         return 0
-                    previous_confirmed = owner.data.get("confirmed_target")
+                    previous_confirmed = owner.confirmed_reference(owner.data)
                 else:
                     owner = Ownership(state_directory, identity, profile, stats.run_id)
-                    previous_confirmed = owner.check_start(getattr(args, "resume_control", False))
+                    suspended = False
+                    try:
+                        previous_confirmed = owner.check_start(getattr(args, "resume_control", False))
+                    except ControlSuspended:
+                        if args.calibrate:
+                            raise
+                        suspended = True
                 engine = ThermalEngine(config)
                 executor = Executor(ipmi, profile, owner, emit, stop)
                 executor.restore_confirmed(previous_confirmed)
+                if not args.service_recover and suspended:
+                    executor.yielded, executor.status = True, "external-override"
                 notify("READY=1\nWATCHDOG=1\nSTATUS=Control preflight complete")
 
                 def alert(report):
@@ -162,9 +171,9 @@ def run_control(args, config):
                     notify_l5(5)
                     # Notify promptly, but wait for readback before any physical write.
 
-                def collect_next(early=True):
+                def collect_next(early=True, selected_engine=None):
                     nonlocal last_report, l5_notified
-                    last_report = collect(ipmi, engine, config, on_alert=alert if early else None,
+                    last_report = collect(ipmi, selected_engine or engine, config, on_alert=alert if early else None,
                                           stop=stop, stats=stats)
                     notify("WATCHDOG=1")
                     return last_report
@@ -175,27 +184,30 @@ def run_control(args, config):
                     elif args.calibrate:
                         run_calibration(executor, identity, config, args.calibrate, collect_next, wait, emit)
                     else:
-                        while not stop.is_set():
-                            started = time.monotonic()
-                            report = collect_next()
-                            check_cancelled(stop)
-                            executor.update(report, args.manual_level)
-                            report.update(mode=mode, applied=executor.status == "verified", control=executor.snapshot(),
+                        from .commands import CommandServer
+                        from .service import ServiceController
+
+                        def publish(report, current_mode):
+                            nonlocal previous_key, last_log
+                            report.update(mode=current_mode, applied=executor.status == "verified", control=executor.snapshot(),
                                           calibration={"status": "validated-profile", "ipmi_argument": executor.snapshot()["byte"],
                                                        "expected_rpm": profile["levels"][str(executor.target)]["rpm_ranges"] if executor.target else None})
-                            notify_l5(max(report["recommended_level"] or 0, executor.target or 0) or None)
+                            if current_mode == "automatic":
+                                notify_l5(max(report["recommended_level"] or 0, executor.target or 0) or None)
                             report["logging_health"] = {"error": logger.error, "dropped_records": logger.dropped}
-                            if logger.error or logger.dropped:
-                                print(f"Logging degraded: {logger.error or 'queue overflow'}; dropped={logger.dropped}", file=sys.stderr)
-                            key = (transition_key(report), executor.status, executor.target)
+                            key = (transition_key(report), current_mode, executor.status, executor.parameter)
                             now = time.monotonic()
                             if key != previous_key or now - last_log >= config["logging"]["interval_seconds"]:
-                                logger.emit(format_log_record(report, "transition" if key != previous_key else "summary", now-started))
+                                logger.emit(format_log_record(report, "transition" if key != previous_key else "summary"))
                                 last_log = now
                             previous_key = key
                             from .main import render
                             output(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report))
-                            wait(poll_wait_seconds(report, config["controller"]["poll_interval_seconds"], time.monotonic()-started))
+
+                        controller = ServiceController(executor, config, state_directory,
+                                                       lambda engine, early: collect_next(early, engine), publish)
+                        with CommandServer(lock.directory) as server:
+                            controller.run(server)
                 except CollectionCancelled:
                     code, normal_stop = 0, True
                 except ExternalOverride as exc:
@@ -207,9 +219,14 @@ def run_control(args, config):
                     emit("calibration_aborted", {**executor.snapshot(), "reason": str(exc)})
                     code = 1
                 except Exception as exc:
-                    emit("control_failed", {**executor.snapshot(), "reason": str(exc)})
+                    if executor.yielded:
+                        relinquish(exc)
+                    else:
+                        emit("control_failed", {**executor.snapshot(), "reason": str(exc)})
                     code = 1
-                    if owner.active and not stop.is_set() and not owner.data["fallback_attempted"]:
+                    if (owner.active and not stop.is_set() and not executor.yielded and
+                            not owner.data["fallback_attempted"] and
+                            (controller is None or controller.allow_fallback)):
                         try:
                             fallback(executor, lambda: collect_next(False), wait, emit)
                         except CollectionCancelled:

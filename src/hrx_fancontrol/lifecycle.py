@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from .calibration import read_json
+from .protocol import LEVEL_BYTES, level_for_parameter, validate_parameter
 
 RUNTIME_DIR = Path("/run/hrx-fancontrol")
 STATE_DIR = Path("/var/lib/hrx-fancontrol")
@@ -65,7 +66,7 @@ class Ownership:
                      "invocation_id": os.environ.get("INVOCATION_ID"),
                      "profile_digest": profile_digest(profile) if profile else None,
                      "active": True, "fallback_attempted": False, "last_target": None,
-                     "confirmed_target": None, "yielded": False}
+                     "confirmed_target": None, "parameter": None, "confirmed_parameter": None, "yielded": False}
         self.active = False
 
     def _save(self):
@@ -87,18 +88,20 @@ class Ownership:
             if name is not None:
                 os.unlink(name)
 
-    def before_write(self, level, fallback=False):
+    def before_write(self, level, fallback=False, parameter=None):
         if self.data.get("yielded"):
             raise ControlSuspended("Control yielded to an external setting")
         if fallback and self.data["fallback_attempted"]:
             raise ValueError("Fallback was already attempted")
-        self.data.update(last_target=level, confirmed_target=None,
+        parameter = LEVEL_BYTES[level] if parameter is None else validate_parameter(parameter)
+        self.data.update(active=True, last_target=level, parameter=parameter, confirmed_parameter=None, confirmed_target=None,
                          fallback_attempted=self.data["fallback_attempted"] or fallback)
         self._save()
         self.active = True
 
-    def confirm(self, level):
-        self.data.update(last_target=level, confirmed_target=level)
+    def confirm(self, level, parameter=None):
+        parameter = LEVEL_BYTES[level] if parameter is None else validate_parameter(parameter)
+        self.data.update(active=True, last_target=level, confirmed_target=level, parameter=parameter, confirmed_parameter=parameter)
         self._save()
         self.active = True
 
@@ -125,19 +128,38 @@ class Ownership:
         if previous.get("yielded") is not True:
             # An interrupted stop-post may have observed a change but failed to
             # persist it. Retain the old confirmed baseline for the next startup.
-            confirmed = previous.get("confirmed_target")
+            confirmed = self.confirmed_reference(previous)
             if (previous.get("active") is True and previous.get("identity") == self.data["identity"] and
-                    type(confirmed) is int and confirmed in range(1, 6) and
-                    confirmed == previous.get("last_target")):
+                    confirmed is not None):
                 return confirmed
             return
         raise ControlSuspended("检测到此前已让位，使用 --resume-control 主动重新启用。")
+
+    def resume(self):
+        """An explicit operator command starts a new intent, never an ordinary restart."""
+        if self.path.exists():
+            previous = read_json(self.path)
+            if previous.get("identity") != self.data["identity"]:
+                raise ValueError("Cannot resume another machine's control record")
+        self.data.update(active=False, yielded=False, fallback_attempted=False,
+                         last_target=None, confirmed_target=None, parameter=None, confirmed_parameter=None)
+        self._save()
+        self.active = False
 
     def finish(self):
         if self.active:
             self.data["active"] = False
             self._save()
             self.active = False
+
+    @staticmethod
+    def confirmed_reference(data):
+        parameter = data.get("parameter", LEVEL_BYTES.get(data.get("last_target")))
+        confirmed = data.get("confirmed_parameter", LEVEL_BYTES.get(data.get("confirmed_target")))
+        if type(parameter) is int and 1 <= parameter <= 100 and confirmed == parameter:
+            level = level_for_parameter(parameter)
+            return level if level is not None else {"parameter": parameter}
+        return None
 
     @classmethod
     def recover(cls, directory, identity, profile):
@@ -147,6 +169,9 @@ class Ownership:
         if not invocation or os.environ.get("SERVICE_RESULT") not in (
                 "exit-code", "signal", "core-dump", "watchdog", "timeout", "oom-kill"):
             return None
+        from .service_state import recovery_allowed
+        if not recovery_allowed(directory, identity):
+            return None
         path = Path(directory) / "owner.json"
         if not path.exists():
             return None
@@ -154,11 +179,12 @@ class Ownership:
         if (not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("active") is not True or
                 data.get("yielded") is True or
                 data.get("fallback_attempted") is not False or data.get("invocation_id") != invocation or
-                data.get("identity") != identity or data.get("profile_digest") != profile_digest(profile) or
-                type(data.get("last_target")) is not int or data["last_target"] not in range(1, 6)):
+                data.get("identity") != identity or data.get("profile_digest") != profile_digest(profile)):
             return None
-        confirmed = data.get("confirmed_target")
-        if confirmed is not None and (type(confirmed) is not int or confirmed != data["last_target"]):
+        parameter = data.get("parameter", LEVEL_BYTES.get(data.get("last_target")))
+        confirmed = data.get("confirmed_parameter", LEVEL_BYTES.get(data.get("confirmed_target")))
+        validate_parameter(parameter)
+        if confirmed is not None and (type(confirmed) is not int or confirmed != parameter):
             raise ValueError("Invalid confirmed control target")
         owner = cls(directory, identity, profile, data.get("run_id"))
         owner.data, owner.active = data, True

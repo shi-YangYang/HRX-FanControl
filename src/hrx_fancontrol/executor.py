@@ -3,7 +3,7 @@ import time
 
 from .calibration import SAMPLE_INTERVAL, SETTLE_SECONDS, STABLE_SAMPLES, rpm_matches, rpm_ranges
 from .ipmi import check_cancelled, parse_control_status
-from .protocol import FANS, LEVEL_BYTES, matches_level
+from .protocol import FANS, LEVEL_BYTES, matches_level, matches_parameter, level_for_parameter, validate_parameter
 
 
 class ExecutionFailure(RuntimeError):
@@ -22,6 +22,8 @@ class Executor:
     def __init__(self, ipmi, profile, owner, emit, stop, clock=time.monotonic):
         self.ipmi, self.profile, self.owner, self.emit, self.stop = ipmi, profile, owner, emit, stop
         self.clock = clock
+        self.parameter = None
+        self.confirmed_parameter = None
         self.target = None
         self.status = "waiting-for-data"
         self.completed_at = None
@@ -34,28 +36,51 @@ class Executor:
         self.yielded = False
         self.ownership_pending = False
 
+    def resume(self):
+        self.owner.resume()
+        self.__init__(self.ipmi, self.profile, self.owner, self.emit, self.stop, self.clock)
+
     def restore_confirmed(self, level):
         # A durable target is historical evidence, not permission to write now.
-        self.target = self.confirmed_target = level
-        self.ownership_pending = level is not None
+        parameter = level.get("parameter") if isinstance(level, dict) else LEVEL_BYTES.get(level)
+        self.parameter = self.confirmed_parameter = parameter
+        self.target = self.confirmed_target = level_for_parameter(parameter)
+        self.ownership_pending = parameter is not None
 
     def snapshot(self):
-        return {"target_level": self.target, "byte": f"0x{LEVEL_BYTES[self.target]:02x}" if self.target else None,
+        return {"target_level": self.target, "parameter": self.parameter, "byte": f"0x{self.parameter:02x}" if self.parameter else None,
+                "bmc_confirmed": (not self.ownership_pending and self.parameter is not None and
+                                  self.confirmed_parameter == self.parameter),
+                "ownership_pending": self.ownership_pending,
+                "rpm_calibrated": self.target is not None and self.profile is not None,
                 "status": self.status, "verified": self.status == "verified", "stable_samples": self.confirmations,
                 "required_samples": STABLE_SAMPLES, "command": self.command, "error": self.error}
 
     def request(self, level, *, fallback=False):
+        if type(level) is not int or level not in LEVEL_BYTES:
+            raise ValueError("Expected level 1..5")
+        self._request(LEVEL_BYTES[level], level, fallback=fallback)
+
+    def request_parameter(self, parameter):
+        validate_parameter(parameter)
+        self._request(parameter, level_for_parameter(parameter), manual=True)
+
+    def _request(self, parameter, level, *, fallback=False, manual=False):
         check_cancelled(self.stop)
         self.guard_external_change()
-        self.owner.before_write(level, fallback=fallback)
-        self.confirmed_target = None
+        if manual:
+            self.owner.before_write(level, fallback=fallback, parameter=parameter)
+        else:
+            self.owner.before_write(level, fallback=fallback)
+        self.confirmed_target = self.confirmed_parameter = None
+        self.parameter = parameter
         self.target, self.status = level, "write-in-flight-unknown"
         self.confirmations = self.mismatches = 0
         self.rpm_window = []
         self.completed_at = self.last_sample = None
         self.error = self.command = None
         self.emit("write_started", self.snapshot())
-        result = self.ipmi.set_level(level)
+        result = self.ipmi.set_parameter(parameter) if manual else self.ipmi.set_level(level)
         self.command = result.summary()
         self.completed_at = self.clock()
         if not result.succeeded:
@@ -70,7 +95,7 @@ class Executor:
         if report["recommended_level"] == 5 and self.target != 5:
             self.request(5)
 
-    def update(self, report, manual_level=None):
+    def update(self, report):
         # Readback belongs to the OLD target, even if this poll requests a new one.
         self.check_readback(report)
         if self.ownership_pending:
@@ -79,7 +104,7 @@ class Executor:
         level = report["recommended_level"]
         if level is None:
             return
-        target = max(level, manual_level or level)
+        target = level
         sensor_valid = report["collection"]["sensor_data_valid"]
         raw = report["bmc"]["raw_bytes"]
         holding = report.get("recovery", {}).get("holding", False)
@@ -93,6 +118,7 @@ class Executor:
                 if physical is None:
                     return  # Keep an unknown setting until valid data and recovery permit control.
                 self.target = physical
+                self.parameter = LEVEL_BYTES[physical]
             target = max(target, self.target)
         if holding and self.target is not None:
             target = max(target, self.target)
@@ -101,6 +127,7 @@ class Executor:
             if (report["collection"]["status"] == "ok" and sensor_valid and raw is not None and
                     matches_level(raw, target) and rpm_matches(report, self.profile, target)):
                 self.target, self.status = target, "pending-verification-existing"
+                self.parameter = LEVEL_BYTES[target]
                 self.completed_at = report["sampled_at_monotonic"] - SETTLE_SECONDS
                 self.confirmations = self.mismatches = 0
                 self.rpm_window = []
@@ -114,25 +141,29 @@ class Executor:
         """Check independently available status against the last actual write target."""
         raw = report["bmc"]["raw_bytes"]
         self.check_external_change(raw)
-        if raw is None or self.target is None:
+        if raw is None or self.parameter is None:
             return
-        if not matches_level(raw, self.target):
+        if not matches_parameter(raw, self.parameter):
             self.fail("BMC mode or six installed duty bytes differ from the requested target")
         self._confirm_current_target()
 
     def _confirm_current_target(self):
-        if self.confirmed_target != self.target or self.ownership_pending:
+        if self.confirmed_parameter != self.parameter or self.ownership_pending:
             # Keep observed BMC state even if saving it fails; fallback must still
             # detect an external change. Only durable confirmation opens recovery.
             self.confirmed_target = self.target
-            self.owner.confirm(self.target)
+            self.confirmed_parameter = self.parameter
+            if self.target is None:
+                self.owner.confirm(None, parameter=self.parameter)
+            else:
+                self.owner.confirm(self.target)
             self.ownership_pending = False
 
     def check_external_change(self, raw):
         if self.yielded:
             raise ExternalOverride(self.error)
-        if (raw is not None and self.confirmed_target is not None and
-                not matches_level(raw, self.confirmed_target)):
+        if (raw is not None and self.confirmed_parameter is not None and
+                not matches_parameter(raw, self.confirmed_parameter)):
             self.yielded = True  # Set before any logging or disk I/O can fail.
             self.status = "external-override"
             self.error = "Previously confirmed BMC mode or duty bytes changed"
@@ -141,7 +172,7 @@ class Executor:
     def guard_external_change(self):
         """Recheck before every new write, including exception/service fallback."""
         self.check_external_change(None)
-        if self.confirmed_target is None:
+        if self.confirmed_parameter is None:
             return
         result = self.ipmi.control_status()
         check_cancelled(self.stop)

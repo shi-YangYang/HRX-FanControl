@@ -5,7 +5,7 @@
 为 **Lenovo ThinkSystem HR650X** 提供温度监测与五档风扇控制。
 
 - 在终端查看各部件温度和六个风扇的实际 RPM。
-- 预览建议档位，或开启自动调速、指定手动最低档位。
+- 预览建议档位，或通过常驻服务切换自动调控与固定手动参数。
 - 保存 JSONL 日志，支持通过 systemd 服务开机运行。
 
 **默认只读。** 调速需要显式开启，并先在目标机器上完成校准。硬件校准、实际调速响应和负载下的散热效果仍待实机验证。
@@ -53,20 +53,26 @@ sudo .venv/bin/hrx-fancontrol
 sudo .venv/bin/hrx-fancontrol --calibrate calibration.json
 ```
 
-校准成功后，使用本机的校准文件，选择一种运行方式：
+校准成功后，按 [systemd 部署指南](docs/hr650x-guide.md#systemd-服务)安装服务；也可在前台启动：
 
 ```sh
-# 自动调速
-sudo .venv/bin/hrx-fancontrol --auto --profile calibration.json
-# 或最低保持 L2，温度需求仍可使它升档
-sudo .venv/bin/hrx-fancontrol --manual-level 2 --profile calibration.json
+sudo .venv/bin/hrx-fancontrol --serve --profile calibration.json
 ```
 
-- **手动模式设置最低档位：** 设为 L2 时最低运行 L2，温度需要 L4 时仍运行 L4。
-- **正常停止保持最后设置：** Ctrl+C 或停止服务不会恢复 BMC 自动调速。
-- **检测到外部修改时让位：** 程序停止调速并保留外部设置，重启后仍暂停；需要主动加 `--resume-control` 恢复，详见[控制指南](docs/hr650x-guide.md#校准与实际控制)。
+保持服务运行，在另一个终端发指令：
 
-需要长期运行时，按 [systemd 部署指南](docs/hr650x-guide.md#systemd-服务)安装服务、设置开机自启，之后通过 `systemctl` 管理。
+```sh
+sudo .venv/bin/hrx-fancontrol auto on    # 开启周期采样与自动调控
+sudo .venv/bin/hrx-fancontrol auto off   # 关闭自动，服务继续运行
+sudo .venv/bin/hrx-fancontrol manual 25  # 固定参数 25，同时关闭自动
+sudo .venv/bin/hrx-fancontrol status     # 查看模式及最近读数
+```
+
+- **手动参数为十进制 1～100：** `25` 发送 `0x19`，不代表 RPM 百分比；曲线不会覆盖手动设置。旧的最低档位模式已删除。
+- **关闭状态会记住：** 手动或关闭自动后，服务/服务器重启仍保持自动关闭，且不会重新写入保存的手动值。
+- **停止与让位：** 正常停止保持最后设置；检测到外部修改后暂停，须显式 `auto on` 或 `manual` 恢复。详见[控制指南](docs/hr650x-guide.md#校准与实际控制)。
+
+手动写入后仅进行有时限的验证读取；命令返回不等于 RPM 已验证。`status` 显示确认进度和缓存时间，非五档参数不会冒充已校准 RPM。
 
 ## 文档
 
