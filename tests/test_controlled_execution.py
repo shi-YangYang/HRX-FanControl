@@ -118,17 +118,44 @@ class EvidenceTests(unittest.TestCase):
             ReadOnlyIPMI()._read(("raw", "0x2e", "0x30"))
 
     def test_identity_checks_local_linux_product_uuid_and_firmware(self):
+        def bmc_info(product_id=503, manufacturer_id=8774, firmware="11.99"):
+            fields = {"Manufacturer ID": manufacturer_id,
+                      "Product ID": f"{product_id} (0x{product_id:04x})" if type(product_id) is int else product_id,
+                      "Firmware Revision": firmware}
+            return CommandResult(("fake",),
+                                 "".join(f"{key} : {value}\n" for key, value in fields.items() if value is not None),
+                                 "", 0, None, .1)
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "product_name").write_text(IDENTITY["product"])
             (root / "product_uuid").write_text(IDENTITY["machine_uuid"])
             ipmi = Mock()
-            ipmi.identity_info.return_value = CommandResult(("fake",), "Manufacturer ID : 8774\nProduct ID : 503 (0x01f7)\nFirmware Revision : 11.99\n", "", 0, None, .1)
             with patch("hrx_fancontrol.identity.platform.system", return_value="Linux"):
-                self.assertEqual(machine_identity(ipmi, root), IDENTITY)
+                for manufacturer_id, product_id in ((8774, 502), (8774, 503), (8774, 501), (8774, 504), (1, 503)):
+                    with self.subTest(manufacturer_id=manufacturer_id, product_id=product_id):
+                        ipmi.identity_info.return_value = bmc_info(product_id, manufacturer_id)
+                        self.assertEqual(machine_identity(ipmi, root),
+                                         {**IDENTITY, "manufacturer_id": manufacturer_id, "product_id": product_id})
+                for invalid in ({"manufacturer_id": None}, {"manufacturer_id": ""}, {"manufacturer_id": "unknown"},
+                                {"product_id": None}, {"product_id": ""}, {"product_id": "unknown"},
+                                {"firmware": None}, {"firmware": ""}):
+                    with self.subTest(invalid=invalid):
+                        ipmi.identity_info.return_value = bmc_info(**invalid)
+                        with self.assertRaises(ValueError):
+                            machine_identity(ipmi, root)
+                ipmi.identity_info.return_value = bmc_info()
                 (root / "product_name").write_text("HR630X")
                 with self.assertRaises(ValueError):
                     machine_identity(ipmi, root)
+                (root / "product_name").write_text(IDENTITY["product"])
+                for invalid_uuid in ("invalid", "00000000-0000-0000-0000-000000000000",
+                                     "ffffffff-ffff-ffff-ffff-ffffffffffff"):
+                    with self.subTest(uuid=invalid_uuid):
+                        (root / "product_uuid").write_text(invalid_uuid)
+                        with self.assertRaises(ValueError):
+                            machine_identity(ipmi, root)
+                (root / "product_uuid").write_text(IDENTITY["machine_uuid"])
             with patch("hrx_fancontrol.identity.platform.system", return_value="Darwin"):
                 with self.assertRaises(ValueError):
                     machine_identity(ipmi, root)

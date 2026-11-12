@@ -41,7 +41,8 @@ def machine_identity(ipmi, dmi_dir=Path("/sys/class/dmi/id")):
     manufacturer = fields.get("Manufacturer ID", "").split()
     product_id = fields.get("Product ID", "").split()
     firmware = fields.get("Firmware Revision", "")
-    if not manufacturer or manufacturer[0] != "8774" or not product_id or product_id[0] != "503" or not firmware:
-        raise ValueError("BMC manufacturer/product must match HR650X 8774/503, with firmware revision")
-    return {"product": product, "machine_uuid": machine, "manufacturer_id": 8774,
-            "product_id": 503, "firmware": firmware}
+    if (not manufacturer or re.fullmatch(r"[0-9]+", manufacturer[0]) is None or not product_id or
+            re.fullmatch(r"[0-9]+", product_id[0]) is None or not firmware):
+        raise ValueError("BMC identity requires numeric manufacturer/product IDs and firmware revision")
+    return {"product": product, "machine_uuid": machine, "manufacturer_id": int(manufacturer[0]),
+            "product_id": int(product_id[0]), "firmware": firmware}

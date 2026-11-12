@@ -223,7 +223,7 @@ ipmitool 1.8.19 的上游解析中，裸参数 `15` 对应字节 `0x0f`，`0x15`
 
 ## 校准与实际控制
 
-所有写模式仅支持 Linux 本机 OpenIPMI；DMI 产品必须为 HR650X、UUID 有效，`mc info` 制造商/产品为 8774/503。服务不加载校准文件；旧 `--profile` 参数兼容接受但忽略。
+所有写模式仅支持 Linux 本机 OpenIPMI；DMI 产品必须为 HR650X、UUID 有效，`mc info` 的厂商和产品编号按实际值记录，不设固定编号限制。服务不加载校准文件；旧 `--profile` 参数兼容接受但忽略。
 
 ```sh
 sudo .venv/bin/hrx-fancontrol --serve
