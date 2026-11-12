@@ -8,7 +8,7 @@
 - 预览建议档位，或通过常驻服务切换自动调控与固定手动参数。
 - 保存 JSONL 日志，支持通过 systemd 服务开机运行。
 
-**默认只读。** 调速需要显式开启，并先在目标机器上完成校准。硬件校准、实际调速响应和负载下的散热效果仍待实机验证。
+**默认只读。** 启动服务后才会调速，无需校准文件。负载下的散热效果仍需在目标服务器观察。
 
 ## 安装
 
@@ -43,13 +43,7 @@ hrx-fancontrol --once --input /usr/share/doc/hrx-fancontrol/examples/hr650x-obse
 
 ## 开启调速
 
-先在目标 HR650X 上校准。**这会实际将风扇从 L5 逐档调至 L1**，需要数分钟；温度需求可能中止校准。校准文件名必须尚不存在。
-
-```sh
-sudo hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --calibrate /etc/hrx-fancontrol/calibration.json
-```
-
-校准成功后，启动已安装的服务并设置开机自启。首次启动默认自动调控，后续遵守已保存的模式：
+启动已安装的服务并设置开机自启。首次启动默认自动调控，后续遵守已保存的模式：
 
 ```sh
 sudo systemctl enable --now hrx-fancontrol
@@ -69,7 +63,7 @@ sudo hrx-fancontrol status     # 查看模式及最近读数
 - **关闭状态会记住：** 手动或关闭自动后，服务/服务器重启仍保持自动关闭，且不会重新写入保存的手动值。
 - **停止与让位：** 正常停止保持最后设置；检测到外部修改后暂停，须显式 `auto on` 或 `manual` 恢复。详见[控制指南](docs/hr650x-guide.md#校准与实际控制)。
 
-手动写入后仅进行有时限的验证读取；命令返回不等于 RPM 已验证。`status` 显示确认进度和缓存时间，非五档参数不会冒充已校准 RPM。
+写入后立即读取 BMC，手动模式和六个风扇的参数都匹配即显示“设置已确认”；不等待 RPM 稳定。回读失败时有界重查，手动设置确认后停止采样。可选的 [RPM 校准测量](docs/hr650x-guide.md#校准与实际控制)不影响服务使用。
 
 ## 文档
 
@@ -77,7 +71,7 @@ sudo hrx-fancontrol status     # 查看模式及最近读数
 - [配置与日志](docs/hr650x-guide.md#配置与日志) · [默认配置](config/default.yaml)
 - [源码](src/hrx_fancontrol/) · [服务模板](systemd/hrx-fancontrol.service)
 
-[Linux CI](.github/workflows/ci.yml) 使用 Ubuntu 24.04、Python 3.9 / 3.12 检查安装、单元测试和 CLI 离线回放，在面向 `main` 的 PR 和 `main` 推送时运行。
+[Linux CI](.github/workflows/ci.yml) 使用 Ubuntu 24.04、Python 3.9 / 3.12 检查安装、单元测试和 CLI 离线回放，在面向 `main` 的 PR 时运行。
 
 [Release CD](.github/workflows/release.yml) 在网页发布 Release 后测试并上传 `.deb` 与校验文件。[发布与升级步骤](docs/hr650x-guide.md#发布版本与升级)说明版本号、附件和配置保留。
 

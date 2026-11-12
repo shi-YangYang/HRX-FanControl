@@ -2,13 +2,11 @@
 import time
 
 from .commands import validate_command
-from .executor import ExecutionFailure, ExternalOverride
+from .executor import ExternalOverride
 from .ipmi import check_cancelled
 from .lifecycle import notify
 from .service_state import ServiceState
 from .thermal_engine import ThermalEngine
-
-MANUAL_TIMEOUT = 90.0
 
 
 class ServiceController:
@@ -22,7 +20,6 @@ class ServiceController:
         self.generation = 0
         self.manual_pending = False
         self.allow_fallback = self.state.data["mode"] == "automatic"
-        self.deadline = None
         self.next_poll = clock()
         mode = "suspended" if executor.yielded else self.state.data["mode"]
         # Startup remembers intent but never reissues a saved manual command.
@@ -38,7 +35,7 @@ class ServiceController:
                 "last_sample_time": report.get("timestamp") if report else None,
                 "sample_age_seconds": round(max(0, self.clock() - report["sampled_at_monotonic"]), 1) if report else None,
                 "readings_are_cached": True,
-                "bmc_raw_bytes": report["bmc"]["raw_bytes"] if report else None,
+                "bmc_raw_bytes": self.executor.raw,
                 "fans_rpm": {name: fan["rpm"] for name, fan in report["fans"].items()} if report else None,
                 "error": self.error}
 
@@ -81,10 +78,20 @@ class ServiceController:
         self.state.set("manual", command["parameter"], active=True)
         self.manual_pending = True
         self.allow_fallback = True
-        self.deadline = self.clock() + MANUAL_TIMEOUT
         self.executor.request_parameter(command["parameter"])
-        self.next_poll = self.clock()
-        return "手动命令已返回，自动已关闭；等待 BMC 回读验证。"
+        if self._finish_manual():
+            return "手动设置已确认，BMC 回读匹配；自动调控已关闭。"
+        self.next_poll = self.clock() + 5
+        return "手动命令已返回，自动已关闭；等待 BMC 回读。"
+
+    def _finish_manual(self):
+        if self.executor.status != "verified":
+            return False
+        self.state.set("manual", self.state.data["parameter"], active=False)
+        self.manual_pending = False
+        self.allow_fallback = False
+        self.executor.owner.finish()
+        return True
 
     def commands(self, server):
         for request in server.pending():
@@ -103,10 +110,20 @@ class ServiceController:
         automatic = self.state.data["mode"] == "automatic"
         if not automatic and not self.manual_pending:
             return
+        self.executor.check_deadline()
         if self.clock() < self.next_poll:
             return
-        if self.manual_pending and self.clock() >= self.deadline:
-            raise ExecutionFailure("Manual verification timed out; current setting is not fully confirmed")
+        if self.manual_pending or self.executor.awaiting_confirmation:
+            # Finish the bounded setting transaction before starting another
+            # sensor poll; slow sensors must not postpone its BMC query deadline.
+            try:
+                self.executor.readback()
+                if self.manual_pending:
+                    self._finish_manual()
+            except ExternalOverride as exc:
+                self.suspend(exc)
+            self.next_poll = self.clock() + (0 if automatic and self.executor.status == "verified" else 5)
+            return
         generation = self.generation
         started = self.clock()
         report = self.collect_next(self.engine, automatic)
@@ -117,28 +134,14 @@ class ServiceController:
         if self.generation != generation:
             return
         try:
-            if automatic:
-                self.executor.update(report)
-            else:
-                self.executor.check_readback(report)
-                if self.executor.target is not None:
-                    self.executor.observe(report)
-                    complete = self.executor.status == "verified"
-                else:
-                    complete = self.executor.confirmed_parameter == self.executor.parameter
-                    if complete:
-                        self.executor.status = "readback-confirmed-rpm-uncalibrated"
-                if complete:
-                    self.state.set("manual", self.state.data["parameter"], active=False)
-                    self.manual_pending = False
-                    self.allow_fallback = False
-                    self.executor.owner.finish()
+            self.executor.update(report)
             self.publish(report, "automatic" if automatic else "manual")
         except ExternalOverride as exc:
             self.suspend(exc)
         from .collection import poll_wait_seconds
-        self.next_poll = self.clock() + poll_wait_seconds(report, self.config["controller"]["poll_interval_seconds"],
-                                                         self.clock() - started)
+        delay = (5 if self.executor.awaiting_confirmation else
+                 poll_wait_seconds(report, self.config["controller"]["poll_interval_seconds"], self.clock() - started))
+        self.next_poll = self.clock() + delay
 
     def run(self, server):
         while not self.executor.stop.is_set():

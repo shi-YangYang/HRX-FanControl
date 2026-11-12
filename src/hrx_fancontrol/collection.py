@@ -107,6 +107,7 @@ def _collect(ipmi, engine, config, source, on_alert, stop, stats, poll_id):
                 failures.append(f"status:{_failure_kind(result)}")
                 raise ValueError(result.error or result.stderr)
             report["bmc"]["raw_bytes"] = parse_control_status(result.stdout)
+            report["bmc"]["read_at_monotonic"] = time.monotonic()
         except ValueError as exc:
             if result.succeeded:
                 failures.append("status:parse")

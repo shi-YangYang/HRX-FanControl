@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 
-from .calibration import SETTLE_SECONDS, load_profile
 from .calibration_run import CalibrationAborted, run_calibration
 from .collection import CollectionStats, collect, poll_wait_seconds, timestamp
 from .executor import ExecutionFailure, Executor, ExternalOverride, OwnershipUnverified
@@ -15,7 +14,7 @@ from .lifecycle import (OVERRIDE_EXIT_STATUS, ControlSuspended, Ownership,
                         StopSignals, WriterLock, control_state_directory, notify)
 from .logger import AsyncLogger, transition_key
 from .log_record import format_log_record
-from .protocol import ControlIPMI, FANS, matches_level
+from .protocol import ControlIPMI
 from .thermal_engine import ThermalEngine
 
 FALLBACK_LEVEL = 3
@@ -26,25 +25,15 @@ def fallback(executor, collect_next, wait, emit, clock=time.monotonic):
     """At most one L3 command; never retries a failed/ambiguous fallback write."""
     executor.request(FALLBACK_LEVEL, fallback=True)
     deadline = clock() + FALLBACK_TIMEOUT
-    while clock() < deadline:
+    while executor.status != "verified" and clock() < deadline:
         wait(5)
-        report = collect_next()
-        executor.check_readback(report)
-        if executor.profile is not None:
-            executor.observe(report)
-            if executor.status == "verified":
-                emit("fallback_verified", executor.snapshot())
-                return True
-        elif (report["collection"]["status"] == "ok" and report["collection"]["sensor_data_valid"] and
-              report["sampled_at_monotonic"] >= executor.completed_at + SETTLE_SECONDS and
-              matches_level(report["bmc"]["raw_bytes"], FALLBACK_LEVEL) and
-              all(name in report["fans"] and not report["fans"][name]["error"] for name in FANS)):
-            executor.status = "readback-only-unverified"
-            emit("fallback_unverified", executor.snapshot())
-            return False
-    executor.status = "verification-timeout"
-    emit("fallback_unverified", executor.snapshot())
-    return False
+        try:
+            executor.readback()
+        except ExecutionFailure:
+            break
+    confirmed = executor.status == "verified"
+    emit("fallback_verified" if confirmed else "fallback_unverified", executor.snapshot())
+    return confirmed
 
 
 def run_control(args, config):
@@ -82,8 +71,8 @@ def run_control(args, config):
                   "applied": control.get("verified", False),
                   "control": {key: value for key, value in control.items()
                               if key != "command" or value and (value.get("error") or value.get("returncode") != 0)},
-                  "message": {"write_started": "开始发送档位，物理状态尚未确认。",
-                              "write_sent": "命令已返回，等待新采样验证。", "verified": "回读与新采样 RPM 已验证。",
+                  "message": {"write_started": "开始发送档位，BMC 设置尚未确认。",
+                              "write_sent": "命令已返回，等待 BMC 回读。", "verified": "设置已确认，BMC 回读匹配。",
                               "write_failed": "写入失败，是否生效可能未知。", "verification_failed": "档位验证失败。",
                               "shutdown": "控制已停止，保持最后设置，不追加写入。",
                               "fallback_verified": f"异常兜底 L{FALLBACK_LEVEL} 已验证。",
@@ -137,7 +126,9 @@ def run_control(args, config):
                 raise ValueError("Calibration output already exists; choose a new path")
             ipmi = ControlIPMI(config["ipmi"]["command_timeout_seconds"], config["ipmi"]["status_timeout_seconds"], stop)
             identity = machine_identity(ipmi)
-            profile = load_profile(args.profile, identity, config) if args.profile else None
+            profile = None  # Service confirmation uses BMC settings, not a machine calibration file.
+            if args.profile:
+                print("--profile 已忽略；调速服务无需校准文件。", file=sys.stderr)
             logger = AsyncLogger(config["logging"])
             with WriterLock() as lock:
                 state_directory = control_state_directory()
@@ -190,8 +181,8 @@ def run_control(args, config):
                         def publish(report, current_mode):
                             nonlocal previous_key, last_log
                             report.update(mode=current_mode, applied=executor.status == "verified", control=executor.snapshot(),
-                                          calibration={"status": "validated-profile", "ipmi_argument": executor.snapshot()["byte"],
-                                                       "expected_rpm": profile["levels"][str(executor.target)]["rpm_ranges"] if executor.target else None})
+                                          calibration={"status": "not-required", "ipmi_argument": executor.snapshot()["byte"],
+                                                       "expected_rpm": None})
                             if current_mode == "automatic":
                                 notify_l5(max(report["recommended_level"] or 0, executor.target or 0) or None)
                             report["logging_health"] = {"error": logger.error, "dropped_records": logger.dropped}

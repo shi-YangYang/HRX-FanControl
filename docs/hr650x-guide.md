@@ -2,7 +2,7 @@
 
 [返回首页](../README.zh-CN.md)
 
-默认只读采集并给出建议，显式校准后可开启实际调速。安装与基本运行见首页；配置和运行命令从项目根目录执行。
+默认只读采集并给出建议，显式启动服务后可开启实际调速，无需校准文件。安装与基本运行见首页；配置和运行命令从项目根目录执行。
 
 ## 国内服务器安装
 
@@ -136,7 +136,7 @@ sudo .venv/bin/hrx-fancontrol --config profile.yaml
 
 相对路径按当前工作目录解析。默认日志为 `logs/hrx-YYYY-MM-DD.jsonl`，按 UTC 日期保留今天及前六天；每 60 秒汇总一次，档位、告警或恢复进度变化立即记录。每行一个 JSON 对象，新记录带 `schema_version: 2`；已有记录不改写，同一天可同时包含旧版与 v2。
 
-文件日志保留中文 `message`、建议 `level`、有效温度 `temperatures_c`、风扇 `fans_rpm` 和采样信息 `sampling`。`level` 只是建议，只读模式下 `applied: false` 表示未调速。实际控制中它表示当前没有完整验证，命令可能已经发送；以 `control.status` 区分等待、失败与已验证。`source` 区分服务器本机采集 `local-openipmi` 与离线回放 `offline-snapshot`。无效或缺失值为 `null`，不会把 NA 或未安装硬件的零值当作正常温度；DTS 语义未确认，不列入绝对温度表。
+文件日志保留中文 `message`、建议 `level`、有效温度 `temperatures_c`、风扇 `fans_rpm` 和采样信息 `sampling`。`level` 只是建议，只读模式下 `applied: false` 表示未调速。实际控制中 `applied: false` 表示设置尚未通过 BMC 回读确认，命令可能已经发送；以 `control.status` 区分等待、失败与已验证。`source` 区分服务器本机采集 `local-openipmi` 与离线回放 `offline-snapshot`。无效或缺失值为 `null`，不会把 NA 或未安装硬件的零值当作正常温度；DTS 语义未确认，不列入绝对温度表。
 
 以下为随附实机快照的**离线回放示例**，为阅读方便展开；文件中每条记录占一行：
 
@@ -214,7 +214,7 @@ sudo .venv/bin/hrx-fancontrol --config profile.yaml
 | `15` | 未记录 | 3584 |
 
 ipmitool 1.8.19 的上游解析中，裸参数 `15` 对应字节 `0x0f`，`0x15` 则是十进制 21；`60` 对应 `0x3c`。
-实际写入固定使用 `raw 0x2e 0x30 0x00 0x00 byte`，L1～L5 字节为 `0x0f / 0x14 / 0x1e / 0x2d / 0x3c`，独立于策略标签；状态读取 `raw 0x2e 0x31`。不会把百分数字符串当成十六进制参数。默认观察报告仍为 `calibration.status: unverified`，控制报告区分已校验资料和当前物理验证状态。
+实际写入固定使用 `raw 0x2e 0x30 0x00 0x00 byte`，L1～L5 字节为 `0x0f / 0x14 / 0x1e / 0x2d / 0x3c`，独立于策略标签；状态读取 `raw 0x2e 0x31`。不会把百分数字符串当成十六进制参数。默认观察报告仍为 `calibration.status: unverified`，控制报告中的 `verified` 仅表示 BMC 设置回读匹配，不代表实际 RPM 已校准。
 
 协议依据为 [Lenovo BMC Command List v0.1.1 §§3.3–3.4](https://download.lenovo.com/servers_pdf/BMC_Command_List_Specification_v0.1.1.pdf)（PDF 第 13–14 页）。协议文档不等于 BMC 11.99 的实机验证，历史平均 RPM 也不能生成完整校准。
 
@@ -223,14 +223,13 @@ ipmitool 1.8.19 的上游解析中，裸参数 `15` 对应字节 `0x0f`，`0x15`
 
 ## 校准与实际控制
 
-所有写模式仅支持 Linux 本机 OpenIPMI；DMI 产品必须为 HR650X、UUID 有效，`mc info` 制造商/产品为 8774/503。固件版本须与校准一致。更换主板、风扇或更新 BMC 后重新校准。
+所有写模式仅支持 Linux 本机 OpenIPMI；DMI 产品必须为 HR650X、UUID 有效，`mc info` 制造商/产品为 8774/503。服务不加载校准文件；旧 `--profile` 参数兼容接受但忽略。
 
 ```sh
-sudo .venv/bin/hrx-fancontrol --calibrate calibration.json
-sudo .venv/bin/hrx-fancontrol --serve --profile calibration.json
+sudo .venv/bin/hrx-fancontrol --serve
 ```
 
-`--calibrate` 的路径必须尚不存在，父目录须可写。程序先取得完整健康采样，再按 L5→L1 写入；降低前检查温度需求、故障及恢复保持。每档写后至少等待 10 秒，收集三次间隔至少 5 秒的连续稳定新样本（默认轮次之间等待 15 秒），六个 RPM 和手动模式/duty 字节都保存在 JSON。每档等待最多 180 秒；期间需求超过当前档位时立即升档并中止校准。
+可选测量：先停止服务，再运行 `sudo .venv/bin/hrx-fancontrol --calibrate calibration.json`。它会实际按 L5→L1 调速，测量结果只供分析，不是服务的启用条件。`--calibrate` 的路径必须尚不存在，父目录须可写。程序先取得完整健康采样，再按 L5→L1 写入；降低前检查温度需求、故障及恢复保持。每档写后至少等待 10 秒，收集三次间隔至少 5 秒的连续稳定新样本（默认轮次之间等待 15 秒），六个 RPM 和手动模式/duty 字节都保存在 JSON。每档等待最多 180 秒；期间需求超过当前档位时立即升档并中止校准。
 
 各风扇的稳定分布须逐档递增。容差由测量范围扩展 15%（至少 200 RPM），再按相邻实测均值的中点裁剪，防止旧档 RPM 被认作新档；测量范围跨过中点时拒绝资料。完整五档成功后才原子发布文件，既有文件不会覆盖。取消或失败不生成完整资料；事件日志保留已测步骤。校准完成/正常取消均保持最后设置。
 
@@ -257,30 +256,29 @@ sudo .venv/bin/hrx-fancontrol --json status
 
 第一次启动服务默认自动运行。`auto off` 或 `manual` 后，模式保存到 `/var/lib/hrx-fancontrol/service-mode.json`；服务或服务器重启后仍关闭自动，且不重新发送保存的手动值。BMC 可能被其他程序或重启改变，保存的目标只是操作意图；重新设置请明确发送 `manual N`。
 
-手动指令返回“命令已返回，等待验证”后，服务只进行最多约90秒加一轮读取的写后验证，然后停止采样。所有IPMI命令串行运行，sensor超时20秒，状态/写入各3秒；新指令等待当前调用结束。队列中的关闭/手动会优先于旧采样产生的自动写入。客户端等待最多60秒，不自动重发；超时提示结果未知，应先用 `status` 核对。
+写入后立即串行查询 BMC：手动模式和六个槽位的参数匹配即显示“设置已确认”。回读失败或尚不匹配时继续等待；自动和手动均每隔 5 秒重查 BMC，期间暂停新温度采样；自动模式确认完成后恢复采样。90 秒后不再发起查询，已在途的查询最多再等待 3 秒。不会为等待确认而重复写入同一目标。手动确认后停止采样，服务继续接收指令。
 
-`pending-verification` 表示命令已发送。BMC确认需手动模式与六个槽位参数匹配；五个已校准参数还需三次写后新RPM符合同机范围，才标为 `verified`。其他参数只标为 `readback-confirmed-rpm-uncalibrated`，不插值或伪造RPM范围。手动验证不使用温度曲线升档；自动重新开启时使用新策略时钟，不把暂停期间算作采样失败。
+`pending-verification` 表示设置尚未确认，`verified` 只表示 BMC 回读匹配。不再要求三次稳定 RPM，也不检查 RPM 区间；RPM 仍用于展示和风扇异常检测。所有 IPMI 命令串行；新指令等待当前调用结束，关闭/手动优先于旧采样产生的自动写入。客户端等待最多 60 秒，不自动重发；超时后用 `status` 核对。自动重新开启时使用新策略时钟，不把暂停期间算作采样失败。
 
 自动模式保留原曲线与5次/300秒读取失败规则。真实执行失败仍最多尝试一次固定L3，再以失败退出；手动操作完成、主动关闭或外部接管后不兜底改速。服务恢复同时检查持久模式、当前invocation和活动操作标记，只有尚在执行/验证的手动操作才可能恢复，空闲手动模式不会因崩溃而写L3。
 
 **已确认的 BMC 模式或六槽参数被改变后，程序让位并停止写入。** 服务仍接收指令，但普通重启不会抢回控制；明确 `auto on` 或 `manual N` 才代表新的主动控制意图。单纯RPM波动或读取超时不算外部修改；暂停后没有周期采样，也无法实时发现外部变化。读写间竞态、改成相同值或两次读取间改后恢复不能保证检测。
 
-客户端通过 `/run/hrx-fancontrol/control.sock` 交给唯一服务执行，不直接操作BMC。socket仅服务用户可访问，服务停止时指令明确报不可连接。服务、校准和恢复共用writer.lock；默认无控制选项仍只读，`--once`/`--input`不能与服务或校准混用。同机身份/profile校验保留，原owner记录中的确认与让位证据继续有效。
+客户端通过 `/run/hrx-fancontrol/control.sock` 交给唯一服务执行，不直接操作BMC。socket仅服务用户可访问，服务停止时指令明确报不可连接。服务、校准和恢复共用writer.lock；默认无控制选项仍只读，`--once`/`--input`不能与服务或校准混用。同机身份核对保留，原owner记录中的确认与让位证据继续有效。
 
 Ctrl+C/SIGTERM或正常停止服务保持最后设置，不恢复BMC自动模式。写入途中取消可能留下未知状态，日志如实记录。校准仍需停止服务后运行；此前已让位时，可给 `--calibrate` 加 `--resume-control` 明确恢复校准权限，此选项不用于服务启动。
 
 ## systemd 服务
 
-使用 `.deb` 时，服务单元已安装；按 README 完成同机校准后执行 `sudo systemctl enable --now hrx-fancontrol` 即可。下面是**源码安装**专用步骤，不要在 deb 安装后再复制 `/etc/systemd/system` 模板。
+使用 `.deb` 时，服务单元已安装；执行 `sudo systemctl enable --now hrx-fancontrol` 即可。下面是**源码安装**专用步骤，不要在 deb 安装后再复制 `/etc/systemd/system` 模板。
 
-先完成前台校准，再安装随附模板。以下在服务器执行，源码放 `/opt/hrx-fancontrol`，YAML 与同机校准放 `/etc/hrx-fancontrol`，日志放 `/var/log/hrx-fancontrol`。最后的 `enable --now` 启动常驻服务并设置开机自启；首次启动默认自动，后续遵守保存的模式。
+安装随附模板。以下在服务器执行，源码放 `/opt/hrx-fancontrol`，YAML 放 `/etc/hrx-fancontrol`，日志放 `/var/log/hrx-fancontrol`。最后的 `enable --now` 启动常驻服务并设置开机自启；首次启动默认自动，后续遵守保存的模式。
 
 ```sh
 sudo mkdir -p /opt/hrx-fancontrol /etc/hrx-fancontrol
 sudo tar -xzf ~/hrx-fancontrol-source.tar.gz -C /opt/hrx-fancontrol
 sudo python3 -m venv /opt/hrx-fancontrol/.venv
 sudo /opt/hrx-fancontrol/.venv/bin/python -m pip install /opt/hrx-fancontrol
-sudo install -m 600 calibration.json /etc/hrx-fancontrol/calibration.json
 sudo tee /etc/hrx-fancontrol/config.yaml >/dev/null <<'YAML'
 logging:
   directory: /var/log/hrx-fancontrol
@@ -304,7 +302,7 @@ sudo systemctl disable --now hrx-fancontrol  # 停止并取消开机自启
 
 更新源码前先停服务，重新安装程序与服务模板，执行 `sudo systemctl daemon-reload` 后再启动。外部接管后的暂停状态会跨服务/系统重启保留，需按上节明确恢复；普通 `start/restart` 不会抢回控制。
 
-服务有 90 秒看门狗，由主事件循环发送进展通知（包括有意暂停时的空闲循环），不会用独立心跳线程掩盖卡住的IPMI；异常退出最多每十分钟重启三次。`ExecStopPost` 只有异常服务结果、当前 invocation 的有效接管标记、同机有效校准且未尝试过兜底时，持同一锁尝试一次 L3。恢复前也核对外部变化；尚未核实控制权时不写，发现变化后让位，后续自动启动不能再写。正常停止、启动失败未接管、旧进程标记、已做过兜底都不写入。`RuntimeDirectoryPreserve=yes` 保留锁的 inode，`StateDirectory` 保存跨重启的让位状态。程序不会自行安装或启用模板。
+服务有 90 秒看门狗，由主事件循环发送进展通知（包括有意暂停时的空闲循环），不会用独立心跳线程掩盖卡住的IPMI；异常退出最多每十分钟重启三次。`ExecStopPost` 只有异常服务结果、当前 invocation 的有效接管标记、同机身份匹配且未尝试过兜底时，持同一锁尝试一次 L3。恢复前也核对外部变化；尚未核实控制权时不写，发现变化后让位，后续自动启动不能再写。正常停止、启动失败未接管、旧进程标记、已做过兜底都不写入。`RuntimeDirectoryPreserve=yes` 保留锁的 inode，`StateDirectory` 保存跨重启的让位状态。程序不会自行安装或启用模板。
 
 前台 SIGKILL、机器断电、BMC 不响应或服务恢复程序无法运行时，都不能保证执行保护；此软件不替代硬件热保护。实机校准、服务重启和满载散热须在目标服务器验证。
 
@@ -331,13 +329,13 @@ sudo systemctl daemon-reload
 systemctl cat hrx-fancontrol
 ```
 
-确认 `ExecStart` 与 `ExecStopPost` 使用 `/usr/bin/hrx-fancontrol`，且配置、同机 `calibration.json` 与 `/var/lib/hrx-fancontrol/` 原模式文件仍在，再执行 `sudo systemctl start hrx-fancontrol`。需要开机自启时执行 `sudo systemctl enable hrx-fancontrol`。启动后 `sudo hrx-fancontrol status` 查看原模式；迁移不需要重新校准，也不要删除 owner 或模式文件。
+确认 `ExecStart` 与 `ExecStopPost` 使用 `/usr/bin/hrx-fancontrol`，且配置与 `/var/lib/hrx-fancontrol/` 原模式文件仍在，再执行 `sudo systemctl start hrx-fancontrol`。需要开机自启时执行 `sudo systemctl enable hrx-fancontrol`。启动后 `sudo hrx-fancontrol status` 查看原模式；迁移不需要重新校准，也不要删除 owner 或模式文件。
 
 仅用虚拟环境前台采集、没有安装系统服务的用户可以直接安装 deb。源码目录与虚拟环境不由 deb 管理，确认迁移成功后再自行清理。
 
 ## 发布版本与升级
 
-维护者先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，通过 PR 合入 `main`，等待 Linux CI 成功。
+维护者先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，创建 PR，等待 Linux CI 成功后再合入 `main`。
 
 1. 在 GitHub 仓库打开 **Releases → Draft a new release**。
 2. 新建标签，例如 `v0.1.0`，Target 选 `main`，填写发布说明，然后 **Publish release**。

@@ -1,5 +1,5 @@
 [Unit]
-Description=HR650X calibrated fan controller
+Description=HR650X fan controller
 After=local-fs.target
 StartLimitIntervalSec=600
 StartLimitBurst=3
@@ -15,8 +15,8 @@ RuntimeDirectoryPreserve=yes
 StateDirectory=hrx-fancontrol
 StateDirectoryMode=0700
 LogsDirectory=hrx-fancontrol
-ExecStart=/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --serve --profile /etc/hrx-fancontrol/calibration.json
-ExecStopPost=/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --service-recover --profile /etc/hrx-fancontrol/calibration.json
+ExecStart=/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --serve
+ExecStopPost=/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --service-recover
 TimeoutStartSec=60
 TimeoutStopSec=150
 WatchdogSec=90

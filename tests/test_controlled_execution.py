@@ -151,25 +151,48 @@ class ActuatorTests(unittest.TestCase):
         self.executor.update(report(recommended=None))
         self.ipmi.set_level.assert_not_called()
 
-    def test_post_write_freshness_and_three_samples_not_returncode(self):
+    def test_write_immediately_reads_bmc_once_without_profile_or_rpm(self):
+        self.executor.profile = None
         self.executor.request(2)
-        for at in (99, 100, 109):
-            self.executor.observe(report(2, at))
-        self.assertEqual(self.executor.confirmations, 0)
-        for at in (110, 125):
+        self.ipmi.control_status.assert_called_once_with()
+        self.assertTrue(self.executor.snapshot()["verified"])
+        self.assertFalse(self.executor.snapshot()["rpm_calibrated"])
+        self.assertEqual(self.executor.confirmations, 1)
+        self.executor.update(report(2, 115, recommended=2))
+        self.ipmi.set_level.assert_called_once_with(2)
+
+    def test_old_or_expired_report_cannot_confirm_write_or_deduplicate(self):
+        self.ipmi.control_status.side_effect = None
+        self.ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
+        self.executor.request(2)
+        for at in (50, 99, 100):
             self.executor.observe(report(2, at))
             self.assertFalse(self.executor.snapshot()["verified"])
+        self.now = 140
+        self.executor.observe(report(2, 101))
+        self.assertFalse(self.executor.snapshot()["verified"])
         self.executor.observe(report(2, 140))
         self.assertTrue(self.executor.snapshot()["verified"])
-        self.executor.update(report(2, 155, recommended=2))
-        self.ipmi.set_level.assert_called_once_with(2)
+        self.now = 200
+        self.executor.update(report(2, 140, recommended=3))
+        self.assertEqual(self.ipmi.set_level.call_count, 2)
+
+    def test_late_completed_poll_cannot_bypass_confirmation_deadline(self):
+        self.ipmi.control_status.side_effect = None
+        self.ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
+        self.executor.request(2)
+        self.now = 209
+        with self.assertRaises(ExecutionFailure):
+            self.executor.check_readback(report(2, 209, recommended=2))
+        self.assertFalse(self.executor.snapshot()["verified"])
+        self.owner.confirm.assert_not_called()
 
     def test_early_l5_uses_no_same_poll_old_rpm_and_interrupts_low_verification(self):
         self.executor.request(1)
         self.now = 115
         self.executor.early_l5(report(1, 110, recommended=5))
         self.executor.observe(report(5, 110, recommended=5))
-        self.assertEqual(self.executor.confirmations, 0)
+        self.assertEqual(self.executor.confirmations, 1)
         self.assertEqual([call.args[0] for call in self.ipmi.set_level.call_args_list], [1, 5])
 
     def test_collected_fan_fault_executes_l3(self):
@@ -195,7 +218,7 @@ class ActuatorTests(unittest.TestCase):
         for index in range(4):
             self.executor.update(report(1, 115 + index * 15, status="failed"))
         self.ipmi.set_level.assert_called_once_with(1)
-        self.assertFalse(self.executor.snapshot()["verified"])
+        self.assertTrue(self.executor.snapshot()["verified"])
         self.executor.update(report(1, 200, recommended=3, status="failed"))
         self.assertEqual(self.ipmi.set_level.call_args.args, (3,))
 
@@ -232,14 +255,14 @@ class ActuatorTests(unittest.TestCase):
                         self.assertFalse(stale["collection"]["sensor_data_valid"])
                         executor.update(stale)
                         self.assertEqual(executor.mismatches, 0)
-                        self.assertFalse(executor.snapshot()["verified"])
+                        self.assertTrue(executor.snapshot()["verified"])
                         if index < poll_count - 1:
                             self.assertEqual(executor.target, 1)
                     self.assertEqual(stale["read_failure"]["consecutive_failures"], poll_count)
                     self.assertIn(trigger, stale["read_failure"]["trigger_reasons"])
                     self.assertEqual([call.args[0] for call in ipmi.set_level.call_args_list], [1, 3])
 
-    def test_invalid_sensor_evidence_cannot_verify_a_new_setting(self):
+    def test_valid_bmc_confirms_setting_independently_of_sensor_validity(self):
         stale = report(2, recommended=3)
         stale["collection"]["sensor_data_valid"] = False
         self.executor.update(stale)
@@ -248,8 +271,8 @@ class ActuatorTests(unittest.TestCase):
         for at in (115, 130, 145):
             stale["sampled_at_monotonic"] = at
             self.executor.observe(stale)
-        self.assertFalse(self.executor.snapshot()["verified"])
-        self.assertEqual(self.executor.confirmations, 0)
+        self.assertTrue(self.executor.snapshot()["verified"])
+        self.assertEqual(self.executor.confirmations, 1)
 
     def test_startup_failures_preserve_higher_or_unknown_physical_settings_until_recovery(self):
         config = load_config()
@@ -342,19 +365,53 @@ class ActuatorTests(unittest.TestCase):
         self.executor.update(report(5, recommended=1))
         self.ipmi.set_level.assert_called_once_with(1)
 
-    def test_valid_mismatch_fails_but_old_rpm_does_not(self):
+    def test_deadline_allows_inflight_read_but_starts_no_new_read_after_90_seconds(self):
+        for started in (189, 190):
+            with self.subTest(started=started):
+                self.now = 100
+                ipmi = Mock()
+                ipmi.set_level.return_value = success()
+                ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
+                executor = Executor(ipmi, None, Mock(), Mock(), self.stop, lambda: self.now)
+                executor.request(2)
+                ipmi.control_status.reset_mock()
+                def delayed_read():
+                    self.now += 3
+                    return status_result(2)
+                ipmi.control_status.side_effect = delayed_read
+                self.now = started
+                if started == 189:
+                    self.assertTrue(executor.readback())
+                    self.assertEqual(self.now, 192)
+                    ipmi.control_status.assert_called_once()
+                else:
+                    with self.assertRaises(ExecutionFailure):
+                        executor.readback()
+                    ipmi.control_status.assert_not_called()
+
+    def test_expired_identical_raw_cannot_skip_a_new_write(self):
+        self.ipmi.control_status.side_effect = None
+        self.ipmi.control_status.return_value = status_result(2)
+        self.executor.readback()  # A cached read, without an adopted target.
+        self.now = 140
+        self.executor.update(report(2, 100, recommended=2))
+        self.ipmi.set_level.assert_called_once_with(2)
+        self.assertTrue(self.executor.snapshot()["verified"])  # New post-write read only.
+
+    def test_pending_mismatch_waits_for_matching_bmc_and_ignores_rpm(self):
+        self.ipmi.control_status.side_effect = None
+        self.ipmi.control_status.return_value = status_result(1)
         self.executor.request(2)
-        with self.assertRaises(ExecutionFailure):
-            self.executor.observe(report(1, 110))
-        self.executor.request(2)
-        mismatch = report(2)
-        mismatch["fans"] = report(1)["fans"]
-        for at in (110, 125):
-            mismatch["sampled_at_monotonic"] = at
-            self.executor.observe(mismatch)
-        mismatch["sampled_at_monotonic"] = 140
-        with self.assertRaises(ExecutionFailure):
-            self.executor.observe(mismatch)
+        self.now = 110
+        self.executor.observe(report(1, self.now))
+        self.assertFalse(self.executor.snapshot()["verified"])
+        data = report(2, 115)
+        data["fans"] = report(1)["fans"]
+        self.now = 115
+        self.executor.observe(data)
+        self.assertTrue(self.executor.snapshot()["verified"])
+        with self.assertRaises(ExternalOverride):
+            self.executor.observe(report(1, 120))
 
     def test_cancelled_write_stays_unknown_without_another_command(self):
         self.ipmi.set_level.side_effect = CollectionCancelled()
@@ -367,10 +424,12 @@ class ActuatorTests(unittest.TestCase):
         self.executor.request(2)
         partial = report(1, 120, status="failed")
         partial["bmc"]["raw_bytes"] = raw(1)
-        with self.assertRaises(ExecutionFailure):
+        with self.assertRaises(ExternalOverride):
             self.executor.observe(partial)
 
     def test_fallback_is_bounded_when_no_reads_succeed(self):
+        self.ipmi.control_status.side_effect = None
+        self.ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
         def wait(seconds):
             self.now += seconds
         result = fallback(self.executor, lambda: report(1, self.now, status="failed"), wait,
@@ -446,7 +505,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
                         self.assertEqual(self.engine.safety.last_valid_sample_at, 100)
                         self.executor.update(data)
                         self.assertEqual(self.executor.mismatches, 0)
-                        self.assertFalse(self.executor.snapshot()["verified"])
+                        self.assertTrue(self.executor.snapshot()["verified"])
                         if index < polls - 1:
                             self.assertEqual(self.executor.target, initial_level)
                     self.assertIn(reason, data["read_failure"]["trigger_reasons"])
@@ -468,7 +527,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         self.assertIsNone(self.engine.states["PCH_Temp"].below_since)
         self.assertEqual(self.engine.previous, {})
         self.assertEqual(self.engine.safety.last_valid_sample_at, 160)
-        self.assertEqual(self.executor.confirmations, 0)
+        self.assertEqual(self.executor.confirmations, 1)
         for count, at in enumerate((221, 236, 251, 266, 281), 1):
             data = self.poll(at, rpm_level=2)
             self.executor.update(data)
@@ -488,7 +547,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
             self.assertEqual(data["recovery"]["healthy_samples"], 0)
             self.assertFalse(data["collection"]["sensor_data_valid"])
             self.assertEqual(self.engine.safety.last_valid_sample_at, 100)
-            self.assertEqual(self.executor.confirmations, 0)
+            self.assertEqual(self.executor.confirmations, 1)
         self.assertEqual([call.args[0] for call in self.ipmi.set_level.call_args_list], [1, 5])
 
     def test_expired_temperature_does_not_hide_independent_positive_readback_mismatch(self):
@@ -497,7 +556,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         data = self.poll(115, delay=31, raw_level=1)
         self.assertFalse(data["collection"]["sensor_data_valid"])
         self.assertEqual(data["bmc"]["raw_bytes"], raw(1))
-        with self.assertRaises(ExecutionFailure):
+        with self.assertRaises(ExternalOverride):
             self.executor.update(data)
         self.assertEqual(self.executor.mismatches, 0)
 
@@ -514,6 +573,10 @@ class LifecycleTests(unittest.TestCase):
         text = render(data)
         self.assertIn("Control target waiting for valid data", text)
         self.assertNotIn("LNone", text)
+        executor.raw = raw(2)
+        data["control"] = executor.snapshot()
+        self.assertIn("BMC raw bytes: " + " ".join(raw(2)), render(data))
+        self.assertEqual(data["bmc"]["raw_bytes"], raw(1))  # Original sampling evidence stays intact.
 
     def test_calibration_events_have_chinese_messages(self):
         from argparse import Namespace
@@ -564,8 +627,8 @@ class LifecycleTests(unittest.TestCase):
             with WriterLock(tmp):
                 pass
 
-    def test_cli_rejects_offline_or_once_control_and_missing_profile(self):
-        invalid = [["--resume-control"], ["--resume-control", "--service-recover", "--profile", "p.json"], ["--auto"], ["--auto", "--profile", "p.json", "--once"],
+    def test_cli_rejects_offline_or_once_control_and_allows_no_profile(self):
+        invalid = [["--resume-control"], ["--resume-control", "--service-recover", "--profile", "p.json"], ["--auto", "--profile", "p.json", "--once"],
                    ["--calibrate", "p.json", "--once", "--input", "sample"],
                    ["--manual-level", "2", "--calibrate", "p.json"], ["--profile", "p.json"]]
         with patch("hrx_fancontrol.protocol.ControlIPMI.set_level") as write, patch("sys.stderr", new_callable=io.StringIO):
@@ -574,13 +637,20 @@ class LifecycleTests(unittest.TestCase):
                     main(argv)
             write.assert_not_called()
 
+    def test_cli_service_and_recovery_accept_no_profile(self):
+        with patch("hrx_fancontrol.control_runtime.run_control", return_value=0) as run:
+            for argv in (["--serve"], ["--auto"], ["--service-recover"],
+                         ["--serve", "--profile", "/missing/old.json"]):
+                self.assertEqual(main(argv), 0)
+            self.assertEqual(run.call_count, 4)
+
     def test_normal_stop_during_write_keeps_last_setting_and_disarms_service_marker(self):
         from argparse import Namespace
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "p.json"
             publish_profile(path, profile())
             args = Namespace(calibrate=None, auto=True,  service_recover=False,
-                             profile=path, json=True)
+                             profile=Path(tmp) / "missing-profile.json", json=True)
             config = load_config()
             config["logging"]["enabled"] = False
             ipmi = Mock()
@@ -629,6 +699,7 @@ class LifecycleTests(unittest.TestCase):
             config = load_config()
             config["logging"]["enabled"] = False
             ipmi = Mock()
+            ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
             ipmi.set_level.side_effect = [success(), CommandResult(("write",), "", "", 1, "write failed", .1)]
             def crash(executor, *_):
                 executor.request(5)
@@ -721,7 +792,7 @@ class WizardTests(unittest.TestCase):
             now[0] += seconds
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "calibration.json"
-            with self.assertRaises(ExecutionFailure):
+            with self.assertRaises(ExternalOverride):
                 run_calibration(executor, IDENTITY, load_config(), path, collect_next, wait,
                                 lambda *_: None, clock=lambda: now[0])
             self.assertFalse(path.exists())
@@ -780,7 +851,7 @@ class ExternalOverrideTests(unittest.TestCase):
                                            (None, True, False), (1, False, True)):
             with self.subTest(target=target, failed=failed, mode=mode_changed):
                 executor, ipmi = self.executor()
-                data = report(2, recommended=target, status="failed" if failed else "ok")
+                data = report(2, 115, recommended=target, status="failed" if failed else "ok")
                 data["bmc"]["raw_bytes"] = raw(1, "0x21") if mode_changed else raw(2)
                 with self.assertRaises(ExternalOverride):
                     executor.update(data)
@@ -806,24 +877,21 @@ class ExternalOverrideTests(unittest.TestCase):
         ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
         executor.request(2)
         self.assertIsNone(executor.confirmed_target)
-        with self.assertRaises(ExecutionFailure):
-            executor.observe(report(1, 115))
+        executor.observe(report(1, 115))
+        self.assertFalse(executor.snapshot()["verified"])
         self.assertFalse(executor.yielded)
         ipmi.set_level.assert_called_once_with(2)
 
-    def test_fallback_yields_during_verification_with_or_without_profile(self):
+    def test_fallback_returns_on_first_match_with_or_without_profile(self):
         for calibrated in (False, True):
-            with self.subTest(calibrated=calibrated):
-                executor, ipmi = self.executor()
-                if not calibrated:
-                    executor.profile = None
-                now = [100]
-                reports = iter([report(3, 105), report(4, 110)])
-                def wait(seconds):
-                    now[0] += seconds
-                with self.assertRaises(ExternalOverride):
-                    fallback(executor, lambda: next(reports), wait, Mock(), lambda: now[0])
-                ipmi.set_level.assert_called_once_with(3)
+            executor, ipmi = self.executor()
+            executor.profile = profile() if calibrated else None
+            ipmi.control_status.side_effect = [status_result(1), status_result(3)]
+            collect_next, wait = Mock(), Mock()
+            self.assertTrue(fallback(executor, collect_next, wait, Mock()))
+            ipmi.set_level.assert_called_once_with(3)
+            collect_next.assert_not_called()
+            wait.assert_not_called()
 
     def run_with(self, tmp, ipmi, *, mode="auto", collect_impl=None, logger=None, resume=False):
         from argparse import Namespace
@@ -845,16 +913,29 @@ class ExternalOverrideTests(unittest.TestCase):
                 controller.next_poll = 0
                 controller.tick(server)
             raise AssertionError("Service test did not reach cancellation or suspension")
-        with patch("hrx_fancontrol.service.ServiceController.run", bounded_service), \
+        from hrx_fancontrol import control_runtime
+        factory = control_runtime.Executor
+        test_clock = [100.0]
+        collector = Mock(side_effect=collect_impl or CollectionCancelled())
+        def timed_collect(*args, **kwargs):
+            value = collector(*args, **kwargs)
+            test_clock[0] = value["sampled_at_monotonic"]
+            return value
+        def fast_wait(seconds):
+            test_clock[0] += seconds
+        if factory is Executor:
+            factory = lambda *args: Executor(*args, clock=lambda: test_clock[0])
+        with patch("hrx_fancontrol.control_runtime.Executor", side_effect=factory), \
+             patch("hrx_fancontrol.service.ServiceController.run", bounded_service), \
              patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
              patch("hrx_fancontrol.control_runtime.ControlIPMI", return_value=ipmi), \
              patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
              patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
-             patch("hrx_fancontrol.control_runtime.collect", side_effect=collect_impl or CollectionCancelled()), \
+             patch("hrx_fancontrol.control_runtime.collect", side_effect=timed_collect), \
              patch("hrx_fancontrol.control_runtime.AsyncLogger", return_value=logger), \
              patch("hrx_fancontrol.control_runtime.format_log_record", side_effect=lambda data, *args: data), \
              patch("hrx_fancontrol.control_runtime.transition_key", return_value=()), \
-             patch("hrx_fancontrol.control_runtime.fallback", side_effect=lambda ex, collect_next, wait, emit: fallback(ex, collect_next, lambda _: None, emit)), \
+             patch("hrx_fancontrol.control_runtime.fallback", side_effect=lambda ex, collect_next, wait, emit: fallback(ex, collect_next, fast_wait, emit, clock=lambda: test_clock[0])), \
              patch("sys.stdout", new_callable=io.StringIO) as output, \
              patch("sys.stderr", new_callable=io.StringIO):
             code = run_control(args, config)
@@ -892,7 +973,7 @@ class ExternalOverrideTests(unittest.TestCase):
                  patch.dict(os.environ, {"INVOCATION_ID": "one", "SERVICE_RESULT": "signal"}, clear=True):
                 directory = Path(tmp) / "run"
                 with WriterLock(directory):
-                    owner = Ownership(directory, IDENTITY, profile(), "old")
+                    owner = Ownership(directory, IDENTITY, None, "old")
                     owner.before_write(2)
                     owner.confirm(2)
                 ipmi = Mock()
@@ -955,7 +1036,7 @@ class ExternalOverrideTests(unittest.TestCase):
                  patch.dict(os.environ, {"INVOCATION_ID": "one", "SERVICE_RESULT": "signal"}, clear=True):
                 directory = Path(tmp) / "run"
                 with WriterLock(directory):
-                    owner = Ownership(directory, IDENTITY, profile(), "old")
+                    owner = Ownership(directory, IDENTITY, None, "old")
                     owner.confirm(2)
                 previous = owner.path.read_bytes()
                 ipmi = Mock()
@@ -1021,10 +1102,11 @@ class ExternalOverrideTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / "run"
             with WriterLock(directory):
-                owner = Ownership(directory, IDENTITY, profile(), "old")
+                owner = Ownership(directory, IDENTITY, None, "old")
                 owner.confirm(2)
             ipmi = Mock()
             ipmi.set_level.return_value = success()
+            ipmi.control_status.return_value = status_result(5)
             code, _ = self.run_with(tmp, ipmi, resume=True,
                                     collect_impl=[report(1, recommended=5), CollectionCancelled()])
             self.assertEqual(code, 0)
@@ -1037,7 +1119,9 @@ class ExternalOverrideTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ipmi = Mock()
             ipmi.set_level.return_value = success()
-            ipmi.control_status.return_value = status_result(1)
+            # The immediate L2 readback reaches the failed save; the fallback
+            # guard then observes an external change to L1 before another write.
+            ipmi.control_status.side_effect = [status_result(2), status_result(1)]
             save = Ownership._save
             failures = []
 
@@ -1048,11 +1132,10 @@ class ExternalOverrideTests(unittest.TestCase):
                 return save(owner)
 
             with patch.object(Ownership, "_save", fail_first_confirmation):
-                code, events = self.run_with(tmp, ipmi, collect_impl=[
-                    report(1, recommended=2), report(2, 115, recommended=2)])
+                code, events = self.run_with(tmp, ipmi, collect_impl=[report(1, recommended=2)])
 
             self.assertEqual(failures, [2])
-            ipmi.control_status.assert_called_once_with()
+            self.assertEqual(ipmi.control_status.call_count, 2)
             ipmi.set_level.assert_called_once_with(2)
             self.assertEqual(code, OVERRIDE_EXIT_STATUS)
             overrides = [item for item in events if item.get("event") == "external_override"]
@@ -1095,6 +1178,7 @@ class ExternalOverrideTests(unittest.TestCase):
                 now = [100]
                 ipmi = Mock()
                 ipmi.set_level.return_value = success()
+                ipmi.control_status.side_effect = [status_result(2), status_result(2), status_result(3)]
 
                 def crash(executor, *_):
                     executor.request(2)
@@ -1112,11 +1196,11 @@ class ExternalOverrideTests(unittest.TestCase):
                     code, events = self.run_with(tmp, ipmi, mode=mode, collect_impl=collect_impl)
                 self.assertEqual(code, 1)  # Recovery does not erase the original execution failure.
                 self.assertEqual([call.args[0] for call in ipmi.set_level.call_args_list], [2, 3])
-                expected = "fallback_unverified" if mode == "calibrate" else "fallback_verified"
+                expected = "fallback_verified"
                 recovery = next(item for item in events if item.get("event") == expected)
                 self.assertEqual(recovery["control"]["target_level"], 3)
                 self.assertIn("L3", recovery["message"])
-                self.assertEqual(recovery["applied"], mode != "calibrate")
+                self.assertTrue(recovery["applied"])
                 self.assertTrue(json.loads((Path(tmp) / "run/owner.json").read_text())["fallback_attempted"])
 
     def test_service_recovery_replaces_prior_l5_with_verified_l3(self):
@@ -1124,13 +1208,13 @@ class ExternalOverrideTests(unittest.TestCase):
              patch.dict(os.environ, {"INVOCATION_ID": "one", "SERVICE_RESULT": "signal"}, clear=True):
             directory = Path(tmp) / "run"
             with WriterLock(directory):
-                owner = Ownership(directory, IDENTITY, profile(), "old")
+                owner = Ownership(directory, IDENTITY, None, "old")
                 owner.before_write(5)
                 owner.confirm(5)
             now = [100]
             ipmi = Mock()
             ipmi.set_level.return_value = success()
-            ipmi.control_status.return_value = status_result(5)
+            ipmi.control_status.side_effect = [status_result(5), status_result(3)]
 
             def collect_impl(*args, **kwargs):
                 now[0] += 15
@@ -1143,7 +1227,7 @@ class ExternalOverrideTests(unittest.TestCase):
             ipmi.set_level.assert_called_once_with(3)
             verified = next(item for item in events if item.get("event") == "fallback_verified")
             self.assertTrue(verified["applied"])
-            self.assertEqual(verified["control"]["stable_samples"], 3)
+            self.assertEqual(verified["control"]["stable_samples"], 1)
             marker = json.loads((directory / "owner.json").read_text())
             self.assertTrue(marker["fallback_attempted"])
             self.assertFalse(marker["active"])
@@ -1157,7 +1241,7 @@ class ExternalOverrideTests(unittest.TestCase):
         def wait(seconds):
             now[0] += seconds
 
-        with self.assertRaises(ExecutionFailure):
-            fallback(executor, lambda: report(5, now[0]), wait, Mock(), lambda: now[0])
+        ipmi.control_status.return_value = status_result(5)
+        self.assertFalse(fallback(executor, Mock(), wait, Mock(), lambda: now[0]))
         ipmi.set_level.assert_called_once_with(3)
         self.assertFalse(executor.snapshot()["verified"])

@@ -12,6 +12,7 @@ from .collection import CollectionStats, collect, poll_wait_seconds, timestamp
 from .config import ConfigError, load_config
 from .ipmi import CollectionCancelled, ReadOnlyIPMI
 from .logger import AsyncLogger, transition_key
+from .protocol import LEVEL_BYTES
 from .log_record import format_log_record
 from .thermal_engine import ThermalEngine
 
@@ -26,22 +27,20 @@ def render(report):
               "Component demand unavailable")
     level = report["recommended_level"]
     recommendation = ("Waiting for valid sensor data; no recommendation" if level is None else
-                      f"recommendation L{level} (policy target {report['policy_target_percent']}%, uncalibrated)")
+                      f"recommendation L{level} (control parameter {LEVEL_BYTES[level]})")
     lines = [f"{report['timestamp']}  DRY-RUN — no fan settings applied",
              f"{demand}; {recommendation} [{report['safety_state']}]",
-             "IPMI argument: unresolved; expected RPM: unresolved; no encoding conversion performed",
+             "Read-only observation; no fan command sent",
              f"{'Sensor':<18} {'Celsius':>8} {'Level':>7} {'C/min':>8}  State"]
     if control:
         lines[0] = f"{report['timestamp']}  {report['mode'].upper()} — {control['status']}"
-        lines[1] = lines[1].replace(", uncalibrated", ", calibrated profile")
         target = f"L{control['target_level']}" if control['target_level'] is not None else "waiting for valid data"
         lines[2] = (f"Control target {target}; byte {control['byte']}; "
-                    f"fresh RPM confirmations {control['stable_samples']}/{control['required_samples']}; "
-                    f"verified={control['verified']}")
+                    f"BMC setting confirmed={control['verified']}")
     if control and report["mode"] == "manual":
         lines[1] = "Automatic sampling/control is off; manual parameter is fixed."
         lines[2] = (f"Manual parameter {control.get('parameter')}; byte {control['byte']}; "
-                    f"BMC confirmed={control.get('bmc_confirmed', False)}; calibrated RPM verified={control['verified']}")
+                    f"BMC confirmed={control.get('bmc_confirmed', False)}")
     failure = report.get("read_failure")
     if failure:
         lines.insert(3, f"Read failures: {failure['consecutive_failures']}/{failure['count_threshold']}; "
@@ -60,9 +59,11 @@ def render(report):
                      f"{sensor['error'] or sensor['policy']}")
     for name, fan in report["fans"].items():
         lines.append(f"{name}: {fan['rpm'] if fan['rpm'] is not None else '--'} RPM  {fan['error'] or 'ok'}")
-    raw = report["bmc"]["raw_bytes"]
-    lines.append(f"BMC raw bytes: {' '.join(raw) if raw else 'unavailable / not read'}; mode and percentage unverified")
-    if control and raw:
+    raw = control.get("bmc_raw_bytes") if control else None
+    if raw is None:
+        raw = report["bmc"]["raw_bytes"]
+    lines.append(f"BMC raw bytes: {' '.join(raw) if raw else 'unavailable / not read'}")
+    if raw:
         from .protocol import decode_status
         lines[-1] = f"BMC raw bytes: {' '.join(raw)}; mode={decode_status(raw)['mode']}"
     for message in report["faults"]:
@@ -71,7 +72,7 @@ def render(report):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="HR650X thermal monitor and explicitly enabled calibrated fan control")
+    parser = argparse.ArgumentParser(description="HR650X thermal monitor and explicitly enabled fan control")
     parser.add_argument("--config", type=Path, help="YAML overrides; bundled HR650X defaults are always loaded")
     parser.add_argument("--once", action="store_true", help="read one snapshot and exit")
     parser.add_argument("--input", type=Path, help="offline ipmitool sensor output; requires --once")
@@ -82,7 +83,7 @@ def main(argv=None):
     modes.add_argument("--auto", action="store_true", help="compatibility alias for --serve; saved off mode is respected")
     modes.add_argument("--serve", action="store_true", help="run the local command service; remember the automatic mode")
     modes.add_argument("--service-recover", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--profile", type=Path, help="same-machine calibration JSON, required for service control")
+    parser.add_argument("--profile", type=Path, help="legacy option; ignored by service control (calibration is optional)")
     parser.add_argument("--resume-control", action="store_true", help="explicitly resume control after an external override")
     actions = parser.add_subparsers(dest="action")
     auto_command = actions.add_parser("auto", help="switch service automatic control on/off")
@@ -114,8 +115,6 @@ def main(argv=None):
         parser.error("Use auto on/manual to resume the service; --resume-control is only for --calibrate")
     if controlling and (args.input or args.once):
         parser.error("Control/calibration cannot be combined with --input or --once")
-    if (args.auto or args.serve or args.service_recover) and not args.profile:
-        parser.error("Service/recovery control requires --profile")
     if args.profile and (not controlling or args.calibrate):
         parser.error("--profile is only valid with --auto, --serve, or service recovery")
     if args.input and not args.once:
