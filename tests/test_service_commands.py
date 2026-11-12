@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 from hrx_fancontrol.commands import (CommandServer, Request, command_client, decimal_parameter,
                                     receive, send, validate_command, MAX_MESSAGE)
+from hrx_fancontrol.ipmi import CommandResult
 from hrx_fancontrol.executor import Executor, ExternalOverride, ExecutionFailure, OwnershipUnverified
 from hrx_fancontrol.lifecycle import Ownership
 from hrx_fancontrol.protocol import ControlIPMI, matches_parameter
@@ -51,10 +52,11 @@ class ServiceTests(unittest.TestCase):
         self.ipmi = Mock()
         self.ipmi.set_parameter.return_value = success()
         self.ipmi.set_level.return_value = success()
+        self.ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
         self.stop = threading.Event()
-        self.owner = Ownership(self.root, IDENTITY, profile(), "new")
+        self.owner = Ownership(self.root, IDENTITY, None, "new")
         self.events = []
-        self.executor = Executor(self.ipmi, profile(), self.owner,
+        self.executor = Executor(self.ipmi, None, self.owner,
                                  lambda event, value: self.events.append((event, value)), self.stop, lambda: self.now)
         self.collect = Mock(return_value=report(1, self.now, 1))
         self.publish = Mock()
@@ -132,41 +134,103 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(self.controller.snapshot()["automatic"])
         after = report(1, self.now + 1, recommended=5)
         after["bmc"]["raw_bytes"] = parameter_raw(25)
-        self.now += 1
+        self.now += 5
+        self.ipmi.control_status.return_value = CommandResult(("status",), " ".join(byte[2:] for byte in parameter_raw(25)), "", 0, None, .1)
         self.collect.side_effect = None
         self.collect.return_value = after
         self.controller.tick(self.queue)
         state = self.controller.snapshot()
         self.assertTrue(state["control"]["bmc_confirmed"])
-        self.assertFalse(state["control"]["verified"])
+        self.assertTrue(state["control"]["verified"])
         self.assertFalse(state["control"]["rpm_calibrated"])
         self.assertFalse(self.controller.manual_pending)
         self.assertFalse(self.owner.active)
         self.assertFalse(self.controller.allow_fallback)
         self.now += 600
         self.controller.tick(self.queue)
-        self.assertEqual(self.collect.call_count, 2)
+        self.assertEqual(self.collect.call_count, 1)
         self.assertTrue(state["readings_are_cached"])
 
-    def test_known_manual_parameter_uses_five_level_rpm_verification_without_curve(self):
-        self.controller.apply({"action": "manual", "parameter": 20})
-        for moment in (110, 125, 140):
-            self.now = moment
-            self.collect.return_value = report(2, moment, recommended=5)
-            self.controller.tick(self.queue)
+    def test_manual_immediate_bmc_confirmation_has_no_sensor_or_rpm_gate(self):
+        self.ipmi.control_status.side_effect = [self.ipmi.control_status.return_value, status_result(2)]
+        message = self.controller.apply({"action": "manual", "parameter": 20})
+        self.assertIn("设置已确认", message)
         self.assertTrue(self.executor.snapshot()["verified"])
         self.assertFalse(self.controller.manual_pending)
+        self.assertFalse(self.controller.allow_fallback)
         self.ipmi.set_parameter.assert_called_once_with(20)
+        self.assertEqual(self.controller.snapshot()["bmc_raw_bytes"], raw(2))
+        self.assertIsNone(self.controller.snapshot()["sample_age_seconds"])
+        self.now += 600
+        self.controller.tick(self.queue)
+        self.collect.assert_not_called()
         self.ipmi.set_level.assert_not_called()
+
+    def test_already_matching_manual_parameter_is_not_written_again(self):
+        self.ipmi.control_status.return_value = status_result(2)
+        self.controller.apply({"action": "manual", "parameter": 20})
+        self.assertTrue(self.executor.snapshot()["verified"])
+        self.ipmi.set_parameter.assert_not_called()
+        self.collect.assert_not_called()
+
+    def test_pending_auto_checks_bmc_before_slow_sensor_and_resumes_after_confirmation(self):
+        self.executor.request(2)  # Immediate read fails; the write completed at 100.
+        self.assertTrue(self.executor.awaiting_confirmation)
+
+        def slow_poll(*_):
+            self.now += 20
+            return report(2, self.now, recommended=2)
+
+        def inflight_match():
+            self.assertEqual(self.now, 189)
+            self.now += 3
+            return status_result(2)
+
+        self.collect.side_effect = slow_poll
+        self.ipmi.control_status.side_effect = inflight_match
+        self.now = 189
+        self.controller.tick(self.queue)
+        self.collect.assert_not_called()
+        self.assertEqual(self.now, 192)
+        self.assertTrue(self.executor.snapshot()["verified"])
+        self.assertEqual(self.controller.state.data["mode"], "automatic")
+
+        self.controller.tick(self.queue)
+        self.collect.assert_called_once()
+        self.assertEqual(self.now, 212)
+        self.ipmi.set_level.assert_called_once_with(2)
+
+    def test_pending_auto_deadline_starts_neither_sensor_nor_bmc_query(self):
+        self.executor.request(2)
+        self.ipmi.control_status.reset_mock()
+        self.now = 190
+        with self.assertRaises(ExecutionFailure):
+            self.controller.tick(self.queue)
+        self.collect.assert_not_called()
+        self.ipmi.control_status.assert_not_called()
+        self.assertFalse(self.executor.snapshot()["verified"])
+        self.ipmi.set_level.assert_called_once_with(2)
+
+    def test_off_wins_over_pending_auto_confirmation_deadline(self):
+        self.executor.request(2)
+        self.ipmi.control_status.reset_mock()
+        self.now = 190
+        request = self.queue.put("off")
+        self.controller.tick(self.queue)
+        self.assertTrue(request.result["ok"])
+        self.assertEqual(self.controller.state.data["mode"], "paused")
+        self.assertFalse(self.controller.allow_fallback)
+        self.collect.assert_not_called()
+        self.ipmi.control_status.assert_not_called()
 
     def test_off_cancels_pending_manual_verification_and_disarms_recovery(self):
         with patch.dict(os.environ, {"INVOCATION_ID": "one", "SERVICE_RESULT": "signal"}):
             self.owner.data["invocation_id"] = "one"  # Created inside the service invocation in production.
             self.controller.apply({"action": "manual", "parameter": 25})
             self.assertTrue(json.loads(self.owner.path.read_text())["active"])
-            self.assertIsNotNone(Ownership.recover(self.root, IDENTITY, profile()))
+            self.assertIsNotNone(Ownership.recover(self.root, IDENTITY, None))
             self.controller.apply({"action": "off"})
-            self.assertIsNone(Ownership.recover(self.root, IDENTITY, profile()))
+            self.assertIsNone(Ownership.recover(self.root, IDENTITY, None))
             self.now += 300
             self.controller.tick(self.queue)
             self.collect.assert_not_called()
@@ -238,32 +302,30 @@ class ServiceTests(unittest.TestCase):
         self.ipmi.set_parameter.assert_called_once_with(25)
         self.assertFalse(self.executor.yielded)
 
-    def test_confirmed_manual_write_yields_to_a_later_external_change(self):
+    def test_completed_manual_does_not_poll_or_reclaim_an_external_change(self):
+        self.ipmi.control_status.side_effect = [self.ipmi.control_status.return_value, status_result(2)]
         self.controller.apply({"action": "manual", "parameter": 20})
-        self.now = 110
-        self.collect.return_value = report(2, self.now, recommended=5)
-        self.controller.tick(self.queue)
-        self.assertTrue(self.executor.snapshot()["bmc_confirmed"])
-        self.assertTrue(self.controller.manual_pending)
-        self.now = 125
-        self.collect.return_value = report(3, self.now, recommended=5)
-        self.controller.tick(self.queue)
-        self.assertEqual(self.controller.state.data["mode"], "suspended")
-        self.assertFalse(self.controller.allow_fallback)
         self.assertFalse(self.controller.manual_pending)
-        self.assertTrue(json.loads(self.owner.path.read_text())["yielded"])
-        self.ipmi.set_level.assert_not_called()
+        self.ipmi.control_status.side_effect = None
+        self.ipmi.control_status.return_value = status_result(3)
+        self.ipmi.control_status.reset_mock()
+        self.now += 100
+        self.controller.tick(self.queue)
+        self.ipmi.control_status.assert_not_called()
+        self.collect.assert_not_called()
+        self.assertFalse(self.controller.allow_fallback)
         self.ipmi.set_parameter.assert_called_once_with(20)
 
-    def test_stale_or_failed_manual_samples_do_not_verify_calibrated_rpm(self):
+    def test_failed_manual_readback_times_out_without_collecting_or_rewriting(self):
         self.controller.apply({"action": "manual", "parameter": 20})
         self.now += 20
-        self.collect.return_value = report(2, self.now, 5, status="failed")
         self.controller.tick(self.queue)
         self.assertFalse(self.executor.snapshot()["verified"])
-        self.now += 100
+        self.now += 70
         with self.assertRaises(ExecutionFailure):
             self.controller.tick(self.queue)
+        self.collect.assert_not_called()
+        self.ipmi.set_parameter.assert_called_once_with(20)
 
     def test_legacy_owner_and_arbitrary_owner_resume_protect_external_changes(self):
         for parameter in (20, 25):
@@ -275,7 +337,7 @@ class ServiceTests(unittest.TestCase):
             else:
                 data.update(last_target=None, confirmed_target=None, parameter=25, confirmed_parameter=25)
             self.owner.path.write_text(json.dumps(data))
-            owner = Ownership(self.root, IDENTITY, profile(), "new")
+            owner = Ownership(self.root, IDENTITY, None, "new")
             executor = Executor(self.ipmi, profile(), owner, Mock(), self.stop)
             executor.restore_confirmed(owner.check_start())
             self.assertTrue(executor.ownership_pending)
@@ -361,6 +423,8 @@ class ServiceSocketIntegrationTests(unittest.TestCase):
             stop = threading.Event()
             ipmi = Mock()
             ipmi.set_parameter.return_value = success()
+            ipmi.control_status.side_effect = [CommandResult(("status",), "", "", None, "IPMI timeout", 3),
+                                               CommandResult(("status",), " ".join(byte[2:] for byte in parameter_raw(25)), "", 0, None, .1)]
             executor = Executor(ipmi, profile(), owner, Mock(), stop)
             entered, release, verified = threading.Event(), threading.Event(), threading.Event()
             block_auto = threading.Event()
@@ -389,11 +453,11 @@ class ServiceSocketIntegrationTests(unittest.TestCase):
                 try:
                     result = command_client({"action": "manual", "parameter": 25}, directory)
                     self.assertTrue(result["ok"])
-                    self.assertTrue(verified.wait(2))
+                    self.assertIn("设置已确认", result["message"])
                     state = command_client({"action": "status"}, directory)["status"]
                     self.assertFalse(state["automatic"])
                     self.assertTrue(state["control"]["bmc_confirmed"])
-                    self.assertFalse(state["control"]["verified"])
+                    self.assertTrue(state["control"]["verified"])
                     self.assertEqual(state["manual_parameter"], 25)
                     block_auto.set()
                     self.assertTrue(command_client({"action": "on"}, directory)["ok"])

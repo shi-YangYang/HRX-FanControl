@@ -8,7 +8,7 @@ Temperature monitoring and five-level fan control for **Lenovo ThinkSystem HR650
 - Preview the recommended level, or switch a running service between automatic control and a fixed manual parameter.
 - Save JSONL logs for analysis and run at boot with systemd.
 
-**Read-only by default.** Fan control requires an explicit option and calibration on the target machine. Hardware calibration, control response, and cooling under load still need real-server validation.
+**Read-only by default.** Fan control starts only when you enable the service; no calibration file is required. Cooling under load still needs observation on the target server.
 
 ## Install
 
@@ -43,13 +43,7 @@ hrx-fancontrol --once --input /usr/share/doc/hrx-fancontrol/examples/hr650x-obse
 
 ## Enable fan control
 
-First calibrate on the target HR650X. **This actually changes the fans from L5 down to L1** and takes several minutes; temperature demand can interrupt the process. Choose a calibration filename that does not already exist.
-
-```sh
-sudo hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --calibrate /etc/hrx-fancontrol/calibration.json
-```
-
-After calibration, start the installed service and enable it at boot. The first start uses automatic control; later starts respect the saved mode:
+Start the installed service and enable it at boot. The first start uses automatic control; later starts respect the saved mode:
 
 ```sh
 sudo systemctl enable --now hrx-fancontrol
@@ -69,7 +63,7 @@ sudo hrx-fancontrol status     # Show the mode and last observed readings
 - **Off mode is remembered:** after manual control or `auto off`, service/server restarts keep automatic control disabled and do not resend the saved manual value.
 - **Stopping and yielding:** normal stops keep the last setting. Detected external changes suspend control until an explicit `auto on` or `manual` command. See the [control guide](docs/hr650x-guide.md#校准与实际控制).
 
-Manual writes use bounded verification reads only. A returned command does not mean RPM has been verified. `status` shows confirmation progress and cache age; parameters outside the five calibrated levels are never reported as calibrated RPM verification.
+Each write is followed immediately by a BMC read. Manual mode and six matching fan parameters confirm the setting, without waiting for RPM to settle. Unavailable readback is retried within a deadline; manual control stops sampling once confirmed. Optional [RPM calibration](docs/hr650x-guide.md#校准与实际控制) is separate from service operation.
 
 ## Documentation
 

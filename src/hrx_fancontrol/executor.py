@@ -1,9 +1,12 @@
 """Actuation state machine: sending is not evidence that a fan setting took effect."""
 import time
 
-from .calibration import SAMPLE_INTERVAL, SETTLE_SECONDS, STABLE_SAMPLES, rpm_matches, rpm_ranges
 from .ipmi import check_cancelled, parse_control_status
-from .protocol import FANS, LEVEL_BYTES, matches_level, matches_parameter, level_for_parameter, validate_parameter
+from .protocol import LEVEL_BYTES, matches_level, matches_parameter, level_for_parameter, validate_parameter
+
+
+CONFIRM_TIMEOUT = 90.0
+READBACK_MAX_AGE = 30.0
 
 
 class ExecutionFailure(RuntimeError):
@@ -31,10 +34,11 @@ class Executor:
         self.confirmations = self.mismatches = 0
         self.command = None
         self.error = None
-        self.rpm_window = []
         self.confirmed_target = None
         self.yielded = False
         self.ownership_pending = False
+        self.raw = None
+        self.read_at = None
 
     def resume(self):
         self.owner.resume()
@@ -52,9 +56,11 @@ class Executor:
                 "bmc_confirmed": (not self.ownership_pending and self.parameter is not None and
                                   self.confirmed_parameter == self.parameter),
                 "ownership_pending": self.ownership_pending,
-                "rpm_calibrated": self.target is not None and self.profile is not None,
+                "rpm_calibrated": False, "confirmation": "bmc-setting",
+                "bmc_raw_bytes": self.raw, "bmc_read_age_seconds":
+                    round(max(0, self.clock() - self.read_at), 1) if self.read_at is not None else None,
                 "status": self.status, "verified": self.status == "verified", "stable_samples": self.confirmations,
-                "required_samples": STABLE_SAMPLES, "command": self.command, "error": self.error}
+                "required_samples": 1, "command": self.command, "error": self.error}
 
     def request(self, level, *, fallback=False):
         if type(level) is not int or level not in LEVEL_BYTES:
@@ -63,6 +69,12 @@ class Executor:
 
     def request_parameter(self, parameter):
         validate_parameter(parameter)
+        self.readback()
+        if self.raw is not None and self.clock() - self.read_at <= READBACK_MAX_AGE and matches_parameter(self.raw, parameter):
+            self.target, self.parameter = level_for_parameter(parameter), parameter
+            self.completed_at = self.clock()
+            self._confirm_current_target()
+            return
         self._request(parameter, level_for_parameter(parameter), manual=True)
 
     def _request(self, parameter, level, *, fallback=False, manual=False):
@@ -76,7 +88,6 @@ class Executor:
         self.parameter = parameter
         self.target, self.status = level, "write-in-flight-unknown"
         self.confirmations = self.mismatches = 0
-        self.rpm_window = []
         self.completed_at = self.last_sample = None
         self.error = self.command = None
         self.emit("write_started", self.snapshot())
@@ -90,6 +101,7 @@ class Executor:
             raise ExecutionFailure(f"Fan write failed or may have executed: {self.error}")
         self.status = "pending-verification"
         self.emit("write_sent", self.snapshot())
+        self.readback()
 
     def early_l5(self, report):
         if report["recommended_level"] == 5 and self.target != 5:
@@ -97,7 +109,7 @@ class Executor:
 
     def update(self, report):
         # Readback belongs to the OLD target, even if this poll requests a new one.
-        self.check_readback(report)
+        fresh_status = self.check_readback(report)
         if self.ownership_pending:
             self.status = "waiting-for-control-status"
             return
@@ -106,7 +118,7 @@ class Executor:
             return
         target = level
         sensor_valid = report["collection"]["sensor_data_valid"]
-        raw = report["bmc"]["raw_bytes"]
+        raw = report["bmc"]["raw_bytes"] if fresh_status else None
         holding = report.get("recovery", {}).get("holding", False)
         if target < 5 and (not sensor_valid or (self.target is None and holding)):
             if self.target is None:
@@ -123,29 +135,62 @@ class Executor:
         if holding and self.target is not None:
             target = max(target, self.target)
         if target != self.target or (self.completed_at is None and sensor_valid):
-            # Existing physical setting can be verified without issuing a redundant write.
-            if (report["collection"]["status"] == "ok" and sensor_valid and raw is not None and
-                    matches_level(raw, target) and rpm_matches(report, self.profile, target)):
-                self.target, self.status = target, "pending-verification-existing"
-                self.parameter = LEVEL_BYTES[target]
-                self.completed_at = report["sampled_at_monotonic"] - SETTLE_SECONDS
-                self.confirmations = self.mismatches = 0
-                self.rpm_window = []
-                self.last_sample = None
+            # The current BMC setting is sufficient; RPM need not change.
+            if raw is not None and self.raw == raw and matches_level(raw, target):
+                self.target, self.parameter = target, LEVEL_BYTES[target]
+                self.completed_at = self.clock()
+                self._confirm_current_target()
             else:
                 self.request(target)
-                return  # Neither old status nor old RPM can verify a command just issued.
-        self.observe(report)
+                return  # The report predates the write; only its new readback can confirm it.
+        self.check_deadline()
 
     def check_readback(self, report):
-        """Check independently available status against the last actual write target."""
-        raw = report["bmc"]["raw_bytes"]
+        """Use the status read's own timestamp, independently of temperature validity."""
+        # Only readback() starts a bounded query before the deadline and may
+        # accept its in-flight result afterward. A completed poll cannot do so.
+        self.check_deadline()
+        accepted = self._accept_readback(report["bmc"]["raw_bytes"],
+                              report["bmc"].get("read_at_monotonic", report["sampled_at_monotonic"]))
+        self.check_deadline()
+        return accepted
+
+    def _accept_readback(self, raw, read_at, *, direct=False):
+        if (raw is None or self.clock() - read_at > READBACK_MAX_AGE or
+                (self.read_at is not None and read_at < self.read_at) or
+                (self.completed_at is not None and
+                 (read_at < self.completed_at or (not direct and read_at == self.completed_at)))):
+            return False
+        self.raw, self.read_at = raw, read_at
         self.check_external_change(raw)
-        if raw is None or self.parameter is None:
-            return
-        if not matches_parameter(raw, self.parameter):
-            self.fail("BMC mode or six installed duty bytes differ from the requested target")
-        self._confirm_current_target()
+        if self.parameter is not None and matches_parameter(raw, self.parameter):
+            self._confirm_current_target()
+        return True
+
+    def readback(self):
+        """One bounded, serial BMC read; an unavailable/mismatching result stays pending."""
+        check_cancelled(self.stop)
+        self.check_deadline()
+        result = self.ipmi.control_status()
+        check_cancelled(self.stop)
+        if result.succeeded:
+            try:
+                raw = parse_control_status(result.stdout)
+            except ValueError:
+                pass
+            else:
+                self._accept_readback(raw, self.clock(), direct=True)
+        self.check_deadline()
+        return self.status == "verified"
+
+    def check_deadline(self):
+        if (self.completed_at is not None and self.status != "verified" and
+                self.clock() >= self.completed_at + CONFIRM_TIMEOUT):
+            self.fail("BMC setting confirmation timed out after 90 seconds")
+
+    @property
+    def awaiting_confirmation(self):
+        return self.status == "pending-verification"
 
     def _confirm_current_target(self):
         if self.confirmed_parameter != self.parameter or self.ownership_pending:
@@ -158,6 +203,10 @@ class Executor:
             else:
                 self.owner.confirm(self.target)
             self.ownership_pending = False
+        previous = self.status
+        self.status, self.confirmations = "verified", 1
+        if previous != "verified":
+            self.emit("verified", self.snapshot())
 
     def check_external_change(self, raw):
         if self.yielded:
@@ -186,59 +235,15 @@ class Executor:
             if self.ownership_pending:
                 self._wait_for_ownership()
             return
-        self.check_external_change(raw)
-        self._confirm_current_target()
+        self._accept_readback(raw, self.clock(), direct=True)
 
     def _wait_for_ownership(self):
         self.status = "waiting-for-control-status"
         raise OwnershipUnverified("等待核实上次运行的 BMC 设置，未发送调速命令。")
 
     def observe(self, report):
-        if self.target is None:
-            return
+        # Retained for callers of the previous executor interface; no RPM gate.
         self.check_readback(report)
-        if report["collection"]["status"] != "ok" or not report["collection"]["sensor_data_valid"]:
-            # Communication loss is handled by ThermalEngine's 5-poll/300s rule.
-            self.confirmations = 0
-            self.rpm_window = []
-            self.status = "waiting-for-data"
-            return
-        if report["bmc"]["raw_bytes"] is None:
-            self.status = "waiting-for-data"
-            self.confirmations = 0
-            self.rpm_window = []
-            return
-        sampled_at = report["sampled_at_monotonic"]
-        if self.completed_at is None or sampled_at < self.completed_at + SETTLE_SECONDS:
-            return
-        if self.last_sample is not None and sampled_at - self.last_sample < SAMPLE_INTERVAL:
-            return
-        self.last_sample = sampled_at
-        if not rpm_matches(report, self.profile, self.target):
-            self.confirmations = 0
-            self.rpm_window = []
-            self.mismatches += 1
-            self.status = "rpm-mismatch"
-            if self.mismatches >= STABLE_SAMPLES:
-                self.fail("Three fresh post-settle RPM samples differ from calibration")
-        else:
-            self.rpm_window.append({"rpm": {name: report["fans"][name]["rpm"] for name in FANS}})
-            self.rpm_window = self.rpm_window[-STABLE_SAMPLES:]
-            try:
-                rpm_ranges(self.rpm_window)
-            except ValueError:
-                self.confirmations = 0
-                self.mismatches += 1
-                self.status = "rpm-unstable"
-                if self.mismatches >= STABLE_SAMPLES:
-                    self.fail("Persistent unstable fresh RPM samples")
-                return
-            self.mismatches = 0
-            self.confirmations = len(self.rpm_window)
-            old_status = self.status
-            self.status = "verified" if self.confirmations >= STABLE_SAMPLES else "pending-verification"
-            if self.status == "verified" and old_status != self.status:
-                self.emit("verified", self.snapshot())
 
     def fail(self, error):
         self.error, self.status = error, "failed"

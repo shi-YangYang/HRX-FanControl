@@ -25,6 +25,7 @@ class PackagingTests(unittest.TestCase):
             self.assertTrue((root / "usr/lib/hrx-fancontrol/hrx_fancontrol/default.yaml").is_file())
             unit = (root / "usr/lib/systemd/system/hrx-fancontrol.service").read_text()
             self.assertNotIn("/opt/", unit)
+            self.assertNotIn("--profile", unit)
             self.assertIn("ExecStopPost=/usr/bin/hrx-fancontrol", unit)
             self.assertNotIn("enable ", (root / "DEBIAN/postinst").read_text())
             self.assertFalse((root / "var").exists())

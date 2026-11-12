@@ -560,7 +560,8 @@ class LoggingAndCLITest(unittest.TestCase):
             self.assertEqual(report["calibration"], {
                 "status": "unverified", "ipmi_argument": None, "expected_rpm": None})
             self.assertIsNone(report["bmc"]["percent"])
-            self.assertIn("uncalibrated", render(report))
+            self.assertIn("control parameter", render(report))
+            self.assertIn("no fan command sent", render(report))
             self.assertEqual(report["commands"], [])
             self.assertFalse(report["applied"])
             popen.assert_not_called()

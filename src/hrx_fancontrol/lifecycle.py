@@ -34,6 +34,8 @@ def control_state_directory():
 
 
 def profile_digest(profile):
+    if profile is None:
+        return None
     return hashlib.sha256(json.dumps(profile, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 

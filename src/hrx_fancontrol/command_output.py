@@ -11,8 +11,8 @@ def render_command(result):
     if state["manual_parameter"] is not None:
         lines.append(f"手动目标：{state['manual_parameter']}（0x{state['manual_parameter']:02x}，保存的设置意图）")
     control = state["control"]
-    lines.append(f"执行状态：{control['status']}；BMC 参数确认：{'是' if control['bmc_confirmed'] else '否'}；"
-                 f"校准 RPM 验证：{'通过' if control['verified'] else '未验证'}")
+    lines.append("设置已确认：BMC 回读匹配。" if control["verified"] else
+                 f"设置尚未确认；状态：{control['status']}")
     if state["last_sample_time"]:
         lines.append(f"最近采样：{state['last_sample_time']}，距今 {state['sample_age_seconds']} 秒（缓存）")
         lines.append("RPM：" + ", ".join(f"{name}={rpm}" for name, rpm in state["fans_rpm"].items()))
