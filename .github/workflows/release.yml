@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y python3-yaml
       - name: Run unit tests
-        run: PYTHONPATH=src:tests /usr/bin/python3 -m unittest discover -s tests -v
+        run: PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/tests" /usr/bin/python3 -m unittest discover -s tests -v
       - name: Build Debian package
         run: python3 scripts/build_deb.py --tag "$RELEASE_TAG"
       - name: Test native installation and upgrades
