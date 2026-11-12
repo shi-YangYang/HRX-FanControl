@@ -1119,7 +1119,9 @@ class ExternalOverrideTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ipmi = Mock()
             ipmi.set_level.return_value = success()
-            ipmi.control_status.return_value = status_result(1)
+            # The immediate L2 readback reaches the failed save; the fallback
+            # guard then observes an external change to L1 before another write.
+            ipmi.control_status.side_effect = [status_result(2), status_result(1)]
             save = Ownership._save
             failures = []
 
@@ -1130,8 +1132,7 @@ class ExternalOverrideTests(unittest.TestCase):
                 return save(owner)
 
             with patch.object(Ownership, "_save", fail_first_confirmation):
-                code, events = self.run_with(tmp, ipmi, collect_impl=[
-                    report(1, recommended=2), report(2, 115, recommended=2)])
+                code, events = self.run_with(tmp, ipmi, collect_impl=[report(1, recommended=2)])
 
             self.assertEqual(failures, [2])
             self.assertEqual(ipmi.control_status.call_count, 2)
