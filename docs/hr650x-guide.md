@@ -271,6 +271,8 @@ Ctrl+C/SIGTERM或正常停止服务保持最后设置，不恢复BMC自动模式
 
 ## systemd 服务
 
+使用 `.deb` 时，服务单元已安装；按 README 完成同机校准后执行 `sudo systemctl enable --now hrx-fancontrol` 即可。下面是**源码安装**专用步骤，不要在 deb 安装后再复制 `/etc/systemd/system` 模板。
+
 先完成前台校准，再安装随附模板。以下在服务器执行，源码放 `/opt/hrx-fancontrol`，YAML 与同机校准放 `/etc/hrx-fancontrol`，日志放 `/var/log/hrx-fancontrol`。最后的 `enable --now` 启动常驻服务并设置开机自启；首次启动默认自动，后续遵守保存的模式。
 
 ```sh
@@ -312,3 +314,47 @@ sudo systemctl disable --now hrx-fancontrol  # 停止并取消开机自启
 sudo journalctl -u hrx-fancontrol --since today --no-pager > hrx-service.log
 sudo tar -czf hrx-logs.tar.gz -C /var/log hrx-fancontrol
 ```
+
+## 从源码服务迁移到 deb
+
+旧模板位于 `/etc/systemd/system/hrx-fancontrol.service`，会覆盖 deb 的 `/usr/lib/systemd/system/hrx-fancontrol.service`。先停服务并备份，确认它确实是此前手工安装的 HRX 模板后再移除；自定义 drop-in 也需检查有无旧 `/opt` 路径。
+
+```sh
+sudo systemctl stop hrx-fancontrol
+sudo cp -a /etc/hrx-fancontrol /etc/hrx-fancontrol.backup
+sudo cp -a /etc/systemd/system/hrx-fancontrol.service /etc/hrx-fancontrol/source-service.backup
+sudo rm /etc/systemd/system/hrx-fancontrol.service
+sudo systemctl daemon-reload
+sudo apt install ./hrx-fancontrol_0.1.0_all.deb
+# 若 dpkg 询问配置文件，保留当前版本（默认 N）。
+sudo systemctl daemon-reload
+systemctl cat hrx-fancontrol
+```
+
+确认 `ExecStart` 与 `ExecStopPost` 使用 `/usr/bin/hrx-fancontrol`，且配置、同机 `calibration.json` 与 `/var/lib/hrx-fancontrol/` 原模式文件仍在，再执行 `sudo systemctl start hrx-fancontrol`。需要开机自启时执行 `sudo systemctl enable hrx-fancontrol`。启动后 `sudo hrx-fancontrol status` 查看原模式；迁移不需要重新校准，也不要删除 owner 或模式文件。
+
+仅用虚拟环境前台采集、没有安装系统服务的用户可以直接安装 deb。源码目录与虚拟环境不由 deb 管理，确认迁移成功后再自行清理。
+
+## 发布版本与升级
+
+维护者先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，通过 PR 合入 `main`，等待 Linux CI 成功。
+
+1. 在 GitHub 仓库打开 **Releases → Draft a new release**。
+2. 新建标签，例如 `v0.1.0`，Target 选 `main`，填写发布说明，然后 **Publish release**。
+3. 在 Actions 等待 **Release Debian package** 成功。它测试标签对应代码、构建并检查 Linux 安装/升级，再把 `.deb` 与 `SHA256SUMS` 加到这条 Release。只保存草稿不会触发。
+
+标签必须是 `vX.Y.Z`，与源码两处版本一致，提交须已进入 `main`。此流程要求仓库关闭 **immutable releases**，因为附件在发布后才生成。构建失败时先看 Actions 日志，Release 页面暂时没有可安装附件；需要改代码时发布新版本。相同源码的失败任务可以重跑；已存在且内容相同的附件会跳过，内容不同则拒绝覆盖。
+
+CI 在 Ubuntu 24.04 临时 runner 上安装包，使用测试服务进程验证首装、运行/停止及启用/禁用四种升级状态、卸载与配置保留；测试不访问 IPMI，不代表 HR650X 实机控制已验证。
+
+用户升级时下载新版本和校验文件，然后：
+
+```sh
+sha256sum --check SHA256SUMS
+sudo apt install ./hrx-fancontrol_0.1.0_all.deb  # 替换为新版本文件名
+sudo hrx-fancontrol status
+```
+
+升级会先正常停止原运行中的服务，更新后恢复运行；原本停止的服务仍停止，开机启用状态不变。配置文件遇到提示时保留当前版本；校准、日志、自动开关/手动模式及外部让位记录保留。自动关闭模式不会因升级变成自动开启。第一次安装无需校准文件，不会启动服务。
+
+这是本地 deb 安装，不是 APT 软件源：`apt upgrade` 不会自动找到 GitHub 上的新版本。依赖由服务器已有 Ubuntu 镜像安装。普通卸载 `sudo apt remove hrx-fancontrol` 停服务并保留配置和机器数据；`apt purge` 还会删除包提供的 `config.yaml`，校准、模式与日志仍保留。

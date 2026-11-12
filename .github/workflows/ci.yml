@@ -44,3 +44,16 @@ jobs:
 
       - name: Replay snapshot through installed CLI
         run: hrx-fancontrol --once --input examples/hr650x-observed-sensors.txt --json --no-log
+
+  debian-package:
+    name: Debian install and upgrade
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build Debian package
+        run: python3 scripts/build_deb.py
+      - name: Test native installation and upgrades
+        run: bash scripts/test_deb_install.sh
