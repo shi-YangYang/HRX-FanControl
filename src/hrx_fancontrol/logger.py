@@ -81,6 +81,9 @@ class AsyncLogger:
 
 def transition_key(report):
     return (report["recommended_level"], report["safety_state"], tuple(report["faults"]),
-            tuple(report["emergencies"]), tuple(sorted(report["sensor_errors"].items())),
+            tuple(report["emergencies"]), tuple(report.get("bmc_alarms", [])),
+            tuple(sorted(report["sensor_errors"].items())),
             tuple((name, sensor["requested_level"]) for name, sensor in report["sensors"].items()),
-            tuple(report.get("bmc", {}).get("raw_bytes") or []))
+            tuple(report.get("bmc", {}).get("raw_bytes") or []),
+            tuple(report.get("read_failure", {}).get("trigger_reasons", [])),
+            report.get("recovery", {}).get("healthy_samples", 0))

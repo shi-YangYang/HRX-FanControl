@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+state=/run/hrx-fancontrol-package
+case "$1" in
+    configure)
+        # Record potential unit links without creating them, for later purging.
+        deb-systemd-helper update-state hrx-fancontrol.service
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            if [ -f "$state/restart" ]; then
+                # A prior running service is restarted with its persisted mode.
+                systemctl start hrx-fancontrol.service
+                rm -f "$state/restart"
+            fi
+        fi
+        ;;
+esac

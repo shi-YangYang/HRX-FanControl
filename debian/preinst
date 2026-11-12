@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+# This flag is private to package upgrades; it never represents fan ownership.
+state=/run/hrx-fancontrol-package
+case "$1" in
+    upgrade)
+        if [ -d /run/systemd/system ]; then
+            if [ -L "$state" ]; then exit 1; fi
+            install -d -m 700 "$state"
+            # Preserve an earlier stop marker if dpkg retries an interrupted upgrade.
+            if ! active_state=$(systemctl show --property=ActiveState --value hrx-fancontrol.service); then
+                echo 'Cannot read hrx-fancontrol service state; upgrade stopped.' >&2
+                exit 1
+            fi
+            case "$active_state" in
+                active|activating|reloading)
+                    touch "$state/restart"
+                    systemctl stop hrx-fancontrol.service
+                    ;;
+                deactivating)
+                    # Complete an operator's stop, without turning it into a restart.
+                    systemctl stop hrx-fancontrol.service
+                    ;;
+                inactive|failed)
+                    ;;
+                *)
+                    printf '%s\n' "Unknown hrx-fancontrol service state: $active_state; upgrade stopped." >&2
+                    exit 1
+                    ;;
+            esac
+        fi
+        ;;
+    install)
+        rm -f "$state/restart"
+        ;;
+esac

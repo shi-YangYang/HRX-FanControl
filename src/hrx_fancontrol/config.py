@@ -85,22 +85,33 @@ def validate(c):
             raise ConfigError(f"{section}.{key} must be a boolean")
     for section, key in (
         ("controller", "poll_interval_seconds"), ("ipmi", "command_timeout_seconds"),
+        ("ipmi", "status_timeout_seconds"), ("safety", "read_failure_timeout_seconds"),
         ("logging", "interval_seconds"), ("safety", "sensor_timeout_seconds"),
     ):
         _number(c[section][key], f"{section}.{key}", 0.01)
     for section, key in (
         ("hysteresis", "downshift_delay_seconds"), ("hysteresis", "downshift_margin_celsius"),
-        ("safety", "recovery_delay_seconds"), ("fan", "minimum_rpm"),
+        ("fan", "minimum_rpm"),
     ):
         _number(c[section][key], f"{section}.{key}")
-    for section, key in (("logging", "retention_days"), ("logging", "queue_capacity"), ("safety", "safe_level")):
+    for section, key in (("logging", "retention_days"), ("logging", "queue_capacity"), ("safety", "safe_level"),
+                         ("safety", "recovery_success_count"), ("safety", "read_failure_count"),
+                         ("safety", "read_failure_level")):
         value = c[section][key]
         if type(value) is not int or value < 1:
             raise ConfigError(f"{section}.{key} must be a positive integer")
-    if c["safety"]["safe_level"] > 5:
-        raise ConfigError("safe_level must be in 1..5")
+    for key in ("safe_level", "read_failure_level"):
+        if c["safety"][key] > 5:
+            raise ConfigError(f"{key} must be in 1..5")
     if c["safety"]["sensor_timeout_seconds"] <= c["controller"]["poll_interval_seconds"]:
         raise ConfigError("sensor_timeout_seconds must exceed poll_interval_seconds")
+    for key in ("command_timeout_seconds", "status_timeout_seconds"):
+        if c["ipmi"][key] >= c["safety"]["sensor_timeout_seconds"]:
+            raise ConfigError(f"ipmi.{key} must be less than safety.sensor_timeout_seconds")
+    if c["ipmi"]["read_control_status"] and (c["ipmi"]["command_timeout_seconds"] +
+                                           c["ipmi"]["status_timeout_seconds"] >=
+                                           c["safety"]["sensor_timeout_seconds"]):
+        raise ConfigError("Combined IPMI timeouts must be less than safety.sensor_timeout_seconds")
     levels = c["fan"]["levels"]
     if not isinstance(levels, list) or len(levels) != 5 or any(type(v) is not int for v in levels):
         raise ConfigError("fan.levels must contain five integer percentages")

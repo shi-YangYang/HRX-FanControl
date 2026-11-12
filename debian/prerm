@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+case "$1" in
+    remove|deconfigure)
+        if [ -d /run/systemd/system ]; then
+            systemctl stop hrx-fancontrol.service
+        fi
+        rm -f /run/hrx-fancontrol-package/restart
+        ;;
+esac

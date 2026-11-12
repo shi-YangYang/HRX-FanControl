@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+state=/run/hrx-fancontrol-package
+case "$1" in
+    remove|purge)
+        rm -f "$state/restart"
+        rmdir "$state" 2>/dev/null || true
+        if [ -d /run/systemd/system ]; then systemctl daemon-reload; fi
+        if [ "$1" = purge ]; then
+            deb-systemd-helper purge hrx-fancontrol.service
+        fi
+        # Preserve calibration, ownership, mode and logs even when purging.
+        ;;
+    abort-install|abort-upgrade)
+        if [ -d /run/systemd/system ] && [ -f "$state/restart" ]; then
+            systemctl daemon-reload
+            systemctl start hrx-fancontrol.service
+            rm -f "$state/restart"
+        fi
+        ;;
+esac

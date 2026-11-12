@@ -1,0 +1,36 @@
+[Unit]
+Description=HR650X calibrated fan controller
+After=local-fs.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+WorkingDirectory=/opt/hrx-fancontrol
+RuntimeDirectory=hrx-fancontrol
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=hrx-fancontrol
+StateDirectoryMode=0700
+LogsDirectory=hrx-fancontrol
+ExecStart=/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --serve --profile /etc/hrx-fancontrol/calibration.json
+ExecStopPost=/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol --config /etc/hrx-fancontrol/config.yaml --service-recover --profile /etc/hrx-fancontrol/calibration.json
+TimeoutStartSec=60
+TimeoutStopSec=150
+WatchdogSec=90
+SuccessExitStatus=78 79
+RestartPreventExitStatus=79
+Restart=on-failure
+RestartSec=30
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/run/hrx-fancontrol /var/lib/hrx-fancontrol /var/log/hrx-fancontrol
+# Local OpenIPMI is required; do not enable PrivateDevices.
+
+[Install]
+WantedBy=multi-user.target
