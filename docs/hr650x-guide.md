@@ -337,7 +337,7 @@ systemctl cat hrx-fancontrol
 
 ## 发布版本与升级
 
-维护者先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，通过 PR 合入 `main`，等待 Linux CI 成功。
+维护者先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，创建 PR，等待 Linux CI 成功后再合入 `main`。
 
 1. 在 GitHub 仓库打开 **Releases → Draft a new release**。
 2. 新建标签，例如 `v0.1.0`，Target 选 `main`，填写发布说明，然后 **Publish release**。
