@@ -6,7 +6,7 @@ import re
 import signal
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 
@@ -32,6 +32,12 @@ def _byte_count(output):
     return len(output) if isinstance(output, bytes) else len((output or "").encode("utf-8"))
 
 
+def supported_sensor_name(name):
+    # GNU getopt can permute options past `sensor get`; names must never be flags.
+    return (isinstance(name, str) and not name.startswith("-") and name != "help" and
+            re.fullmatch(r"[\w ._()/:+-]{1,64}", name) is not None)
+
+
 @dataclass(frozen=True)
 class CommandResult:
     command: tuple
@@ -46,6 +52,7 @@ class CommandResult:
     stderr_bytes: int = 0
     stdout_lines: int = 0
     stdout_tail: str = ""
+    captured_stdout: str = field(default="", repr=False)
 
     @property
     def succeeded(self):
@@ -54,6 +61,7 @@ class CommandResult:
     def summary(self, parse_failed=False):
         result = asdict(self)
         result.pop("stdout")
+        result.pop("captured_stdout")
         if parse_failed:
             result.update(failure_kind="parse", error="IPMI output parse failed",
                           stdout_tail=self.stdout[-DIAGNOSTIC_TAIL_CHARS:])
@@ -65,9 +73,37 @@ class ReadOnlyIPMI:
         self.timeout = timeout
         self.status_timeout = status_timeout
         self.stop = stop
+        self.sensor_reader = None
+
+    def enable_sensor_cache(self, names=(), directory=None):
+        from .sampler import CachedSensorReader
+        self.close()
+        self.sensor_reader = CachedSensorReader(self, names, directory)
+
+    def close(self):
+        if self.sensor_reader is not None:
+            self.sensor_reader.close()
+            self.sensor_reader = None
 
     def sensors(self):
+        if self.sensor_reader is not None:
+            return self.sensor_reader.read()
         return self._read(("sensor",))
+
+    def sensor_table(self, timeout):
+        return self._execute(("ipmitool", "-I", "open", "sensor"), timeout)
+
+    def sdr_info(self, timeout):
+        return self._execute(("ipmitool", "-I", "open", "raw", "0x0a", "0x20"), timeout)
+
+    def dump_sdr(self, path, timeout):
+        return self._execute(("ipmitool", "-I", "open", "sdr", "dump", str(path)), timeout)
+
+    def cached_sensors(self, path, names, timeout):
+        if not names or any(not supported_sensor_name(name) for name in names):
+            raise ValueError("Unsupported cached sensor names")
+        return self._execute(("ipmitool", "-I", "open", "-S", str(path), "-c", "sensor", "get", *names),
+                             timeout, capture_failure=True)
 
     def control_status(self):
         return self._read(("raw", "0x2e", "0x31"))
@@ -79,7 +115,7 @@ class ReadOnlyIPMI:
         timeout = self.timeout if args == ("sensor",) else self.status_timeout
         return self._execute(command, timeout)
 
-    def _execute(self, command, timeout):
+    def _execute(self, command, timeout, *, capture_failure=False):
         check_cancelled(self.stop)
         start = time.monotonic()
         try:
@@ -114,7 +150,8 @@ class ReadOnlyIPMI:
                 failure, error = "diagnostic", "IPMI diagnostic output"
             else:
                 failure, error = None, None
-            return self._result(command, start, timeout, stdout, stderr, process.returncode, failure, error)
+            return self._result(command, start, timeout, stdout, stderr, process.returncode, failure, error,
+                                capture_failure and failure == "nonzero-exit")
         except BaseException:
             if needs_cleanup:
                 self._terminate(process)
@@ -142,13 +179,14 @@ class ReadOnlyIPMI:
         raise OSError("IPMI process pipes did not close after termination")
 
     @staticmethod
-    def _result(command, start, timeout, stdout, stderr, returncode, failure, error):
+    def _result(command, start, timeout, stdout, stderr, returncode, failure, error, capture=False):
         output, diagnostic = _text(stdout), _text(stderr)
         return CommandResult(
             command, output if failure is None else "", diagnostic.strip()[-DIAGNOSTIC_TAIL_CHARS:],
             returncode, error, time.monotonic() - start, timeout, failure,
             _byte_count(stdout), _byte_count(stderr), len(output.splitlines()),
             output[-DIAGNOSTIC_TAIL_CHARS:] if failure else "",
+            output if capture else "",
         )
 
 

@@ -1,11 +1,13 @@
 """One service event loop owns all hardware calls and operator mode transitions."""
+import os
 import time
 
 from .commands import validate_command
-from .executor import ExternalOverride
+from .executor import CONFIRM_TIMEOUT, ExternalOverride
 from ..hardware.ipmi import check_cancelled
 from .lifecycle import notify
 from .service_state import ServiceState
+from .status import StatusCache
 from ..policy.thermal_engine import ThermalEngine
 
 
@@ -19,6 +21,9 @@ class ServiceController:
         self.error = None
         self.generation = 0
         self.manual_pending = False
+        self.activity = None
+        self.status_cache = StatusCache(clock)
+        self.heartbeat_interval = self.heartbeat_at = None
         self.allow_fallback = self.state.data["mode"] == "automatic"
         self.next_poll = clock()
         mode = "suspended" if executor.yielded else self.state.data["mode"]
@@ -26,18 +31,28 @@ class ServiceController:
         self.state.set(mode, self.state.data["parameter"] if mode == "manual" else None)
         if mode != "automatic" and not executor.ownership_pending:
             executor.owner.finish()
+        self.publish_status()
 
     def snapshot(self):
         mode = self.state.data["mode"]
         report = self.last_report
         return {"mode": mode, "automatic": mode == "automatic", "manual_parameter": self.state.data["parameter"],
                 "operation_active": self.manual_pending, "control": self.executor.snapshot(),
+                "activity": self.activity,
                 "last_sample_time": report.get("timestamp") if report else None,
                 "sample_age_seconds": round(max(0, self.clock() - report["sampled_at_monotonic"]), 1) if report else None,
                 "readings_are_cached": True,
                 "bmc_raw_bytes": self.executor.raw,
                 "fans_rpm": {name: fan["rpm"] for name, fan in report["fans"].items()} if report else None,
                 "error": self.error}
+
+    def publish_status(self):
+        report = self.last_report
+        self.status_cache.publish(self.snapshot(), report["sampled_at_monotonic"] if report else None,
+                                  self.executor.read_at)
+
+    def cached_status(self):
+        return self.status_cache.read()
 
     def suspend(self, exc):
         self.manual_pending = False
@@ -51,6 +66,16 @@ class ServiceController:
         self.executor.emit("external_override", {**self.executor.snapshot(), "reason": str(exc)})
 
     def apply(self, command):
+        validate_command(command)
+        self.activity = "command" if command.get("action") != "status" else None
+        self.publish_status()
+        try:
+            return self._apply(command)
+        finally:
+            self.activity = None
+            self.publish_status()
+
+    def _apply(self, command):
         validate_command(command)
         action = command["action"]
         if action == "status":
@@ -78,6 +103,7 @@ class ServiceController:
         self.state.set("manual", command["parameter"], active=True)
         self.manual_pending = True
         self.allow_fallback = True
+        self.publish_status()
         self.executor.request_parameter(command["parameter"])
         if self._finish_manual():
             return "手动设置已确认，BMC 回读匹配；自动调控已关闭。"
@@ -95,17 +121,30 @@ class ServiceController:
 
     def commands(self, server):
         for request in server.pending():
+            queued_seconds = max(0, time.monotonic() - request.queued_at)
             try:
                 message = self.apply(request.command)
-                request.reply({"ok": True, "message": message, "status": self.snapshot()})
+                if request.command["action"] != "status":
+                    self.executor.emit("mode_changed", {**self.executor.snapshot(),
+                                       "action": request.command["action"], "queue_wait_seconds": queued_seconds})
+                request.reply({"ok": True, "message": message, "status": self.snapshot(),
+                               "queue_wait_seconds": round(queued_seconds, 3)})
             except ExternalOverride as exc:
                 self.suspend(exc)
                 request.reply({"ok": False, "message": "检测到外部修改，已让位。", "status": self.snapshot()})
             except Exception as exc:
                 request.reply({"ok": False, "message": str(exc), "status": self.snapshot()})
                 raise  # Persistence or execution failures are not silently converted to success.
+            self.heartbeat()  # A batch of slow operator commands still makes main-loop progress.
 
     def tick(self, server):
+        try:
+            self._tick(server)
+        finally:
+            self.activity = None
+            self.publish_status()
+
+    def _tick(self, server):
         self.commands(server)
         automatic = self.state.data["mode"] == "automatic"
         if not automatic and not self.manual_pending:
@@ -117,6 +156,8 @@ class ServiceController:
             # Finish the bounded setting transaction before starting another
             # sensor poll; slow sensors must not postpone its BMC query deadline.
             try:
+                self.activity = "confirmation"
+                self.publish_status()
                 self.executor.readback()
                 if self.manual_pending:
                     self._finish_manual()
@@ -126,14 +167,20 @@ class ServiceController:
             return
         generation = self.generation
         started = self.clock()
+        self.activity = "sampling"
+        self.publish_status()
         report = self.collect_next(self.engine, automatic)
         check_cancelled(self.executor.stop)
         self.last_report = report
+        self.activity = None
+        self.publish_status()
         # A command queued during a slow read takes precedence over its old recommendation.
         self.commands(server)
         if self.generation != generation:
             return
         try:
+            self.activity = "control"
+            self.publish_status()
             self.executor.update(report)
             self.publish(report, "automatic" if automatic else "manual")
         except ExternalOverride as exc:
@@ -143,8 +190,30 @@ class ServiceController:
                  poll_wait_seconds(report, self.config["controller"]["poll_interval_seconds"], self.clock() - started))
         self.next_poll = self.clock() + delay
 
+    def wait_seconds(self, heartbeat_at=None):
+        deadlines = [] if heartbeat_at is None else [heartbeat_at]
+        if self.state.data["mode"] == "automatic" or self.manual_pending:
+            deadlines.append(self.next_poll)
+            if self.executor.awaiting_confirmation and self.executor.completed_at is not None:
+                deadlines.append(self.executor.completed_at + CONFIRM_TIMEOUT)
+        return max(0, min(deadlines) - self.clock()) if deadlines else None
+
+    def heartbeat(self):
+        if self.heartbeat_at is not None and self.clock() >= self.heartbeat_at:
+            notify("WATCHDOG=1")
+            self.heartbeat_at = self.clock() + self.heartbeat_interval
+
     def run(self, server):
+        server.status = self.cached_status
+        # WATCHDOG_USEC is supplied by systemd. Send from this loop, never a helper thread.
+        try:
+            watchdog = int(os.environ.get("WATCHDOG_USEC", "0")) / 1_000_000
+        except ValueError:
+            watchdog = 0
+        self.heartbeat_interval = watchdog / 2 if watchdog > 0 and os.environ.get("NOTIFY_SOCKET") else None
+        self.heartbeat_at = self.clock() if self.heartbeat_interval else None
         while not self.executor.stop.is_set():
             self.tick(server)
-            notify("WATCHDOG=1")  # Idle is intentional; a blocked hardware call cannot reach this line.
-            server.wake.wait(.2)
+            self.heartbeat()
+            if not self.executor.stop.is_set():
+                server.wake.wait(self.wait_seconds(self.heartbeat_at))

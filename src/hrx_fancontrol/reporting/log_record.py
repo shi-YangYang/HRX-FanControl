@@ -57,6 +57,8 @@ def _explain(text):
 
 
 def _failed(command):
+    if command.get("accepted_unavailable"):
+        return False  # The sampler validated all rows; actual exit 255 remains in detailed commands.
     return bool(command.get("failure_kind") or command.get("error") or
                 command.get("stderr") or command.get("returncode") != 0)
 
@@ -67,7 +69,8 @@ def _command_errors(report):
         if not _failed(command):
             continue
         args = command.get("command", ())
-        operation = "传感器读取" if args and args[-1] == "sensor" else "状态读回"
+        operation = ("传感器读取" if "sensor" in args or "sensor-sample" in args else
+                     "目录缓存" if "sdr" in args else "目录查询" if "0x0a" in args else "状态读回")
         kind = command.get("failure_kind") or (
             "timeout" if command.get("error") == "IPMI timeout" else "command-error")
         error = {"operation": operation, "kind": kind}
@@ -181,6 +184,8 @@ def format_log_record(report, event, elapsed_seconds=None):
         return record
 
     collection = report["collection"]
+    if elapsed_seconds is None:
+        elapsed_seconds = collection.get("elapsed_seconds")
     level = report["recommended_level"]
     record.update(
         message=_message(report, event), level=f"L{level}" if level is not None else None,
@@ -195,6 +200,10 @@ def format_log_record(report, event, elapsed_seconds=None):
                   "elapsed_seconds": round(elapsed_seconds, 3) if elapsed_seconds is not None else None,
                   "counts": dict(collection["counts"])},
     )
+    if collection.get("timings"):
+        record["sampling"]["timings"] = {key: round(value, 3) for key, value in collection["timings"].items()}
+    if collection.get("sensor_reader"):
+        record["sampling"]["sensor_reader"] = dict(collection["sensor_reader"])
     if "control" in report:
         from copy import deepcopy
         record["control"] = deepcopy({key: value for key, value in report["control"].items() if key != "command"})

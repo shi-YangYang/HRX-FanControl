@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from .ipmi import CollectionCancelled, check_cancelled, parse_control_status
 from .sensors import parse_sensors
+from .sampler import SensorSample
 
 
 def timestamp():
@@ -36,6 +37,7 @@ def _failure_kind(result):
 
 def collect(ipmi, engine, config, source=None, on_alert=None, stop=None, stats=None):
     """Collect one poll; cancellation never yields a synthetic failed report."""
+    started = time.monotonic()
     check_cancelled(stop)
     stats = stats if stats is not None else CollectionStats()
     stats.started += 1
@@ -51,20 +53,29 @@ def collect(ipmi, engine, config, source=None, on_alert=None, stop=None, stats=N
     stats.failed += int(failed)
     stats.successful += int(not failed)
     stats.timed_out += int(any(kind.endswith(":timeout") for kind in collection["failure_kinds"]))
-    collection.update(status="failed" if failed else "ok", counts=stats.snapshot())
+    collection.update(status="failed" if failed else "ok", counts=stats.snapshot(),
+                      elapsed_seconds=time.monotonic() - started)
     return report
 
 
 def _collect(ipmi, engine, config, source, on_alert, stop, stats, poll_id):
     sampled_at = time.monotonic()
     commands, errors, failures = [], [], []
+    timings = {"sensor_seconds": 0.0, "status_seconds": 0.0}
+    sensor_reader = {"path": "offline" if source is not None else "full"}
     if source is not None:
         text = source
     else:
         check_cancelled(stop)
+        started = time.monotonic()
         result = ipmi.sensors()
+        timings["sensor_seconds"] = time.monotonic() - started
         check_cancelled(stop)
-        commands.append(result.summary())
+        if isinstance(result, SensorSample):
+            commands.extend(result.subcommands)
+            sensor_reader = result.reader
+        else:
+            commands.append(result.summary())
         text = result.stdout if result.succeeded else ""
         if not result.succeeded:
             errors.append(result.error or f"IPMI sensor diagnostic: {result.stderr}")
@@ -91,7 +102,8 @@ def _collect(ipmi, engine, config, source, on_alert, stop, stats, poll_id):
                     # Command success does not make a stale table usable evidence.
                     # Reuse the policy assessment so control and policy agree on validity.
                     "sensor_data_valid": assessment.valid_sample,
-                    "failure_kinds": failures, "counts": stats.snapshot()},
+                    "failure_kinds": failures, "counts": stats.snapshot(), "timings": timings,
+                    "sensor_reader": sensor_reader},
     )
     check_cancelled(stop)
     # Notify a known L5 recommendation before the optional readback can delay it.
@@ -99,7 +111,9 @@ def _collect(ipmi, engine, config, source, on_alert, stop, stats, poll_id):
         on_alert(report)
     check_cancelled(stop)
     if source is None and config["ipmi"]["read_control_status"]:
+        started = time.monotonic()
         result = ipmi.control_status()
+        timings["status_seconds"] = time.monotonic() - started
         check_cancelled(stop)
         commands.append(result.summary())
         try:
