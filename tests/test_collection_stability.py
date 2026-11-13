@@ -13,11 +13,11 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from hrx_fancontrol.collection import CollectionStats, collect, poll_wait_seconds
+from hrx_fancontrol.hardware.collection import CollectionStats, collect, poll_wait_seconds
 from hrx_fancontrol.config import load_config
-from hrx_fancontrol.ipmi import CollectionCancelled, CommandResult, DIAGNOSTIC_TAIL_CHARS, ReadOnlyIPMI
+from hrx_fancontrol.hardware.ipmi import CollectionCancelled, CommandResult, DIAGNOSTIC_TAIL_CHARS, ReadOnlyIPMI
 from hrx_fancontrol.main import main, render
-from hrx_fancontrol.thermal_engine import ThermalEngine
+from hrx_fancontrol.policy.thermal_engine import ThermalEngine
 
 
 SAMPLE = (Path(__file__).resolve().parents[1] / "examples/hr650x-sensors.txt").read_text()
@@ -162,7 +162,7 @@ class ProcessLifecycleTest(FakeIPMIProgram):
                     except CollectionCancelled as exc:
                         outcomes.append(exc)
 
-                with patch("hrx_fancontrol.ipmi.subprocess.Popen", side_effect=spawn):
+                with patch("hrx_fancontrol.hardware.ipmi.subprocess.Popen", side_effect=spawn):
                     worker = threading.Thread(target=read, daemon=True)
                     worker.start()
                     try:
@@ -182,7 +182,7 @@ class ProcessLifecycleTest(FakeIPMIProgram):
                 self.assertEqual(children[0].returncode, -signal.SIGKILL if ignore_term else -signal.SIGTERM)
                 self.assert_gone(pid)
 
-    @patch("hrx_fancontrol.ipmi.subprocess.Popen")
+    @patch("hrx_fancontrol.hardware.ipmi.subprocess.Popen")
     def test_cancel_before_start_never_spawns(self, popen):
         stop = threading.Event()
         stop.set()

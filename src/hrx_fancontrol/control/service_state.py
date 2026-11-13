@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from .calibration import read_json
-from .protocol import validate_parameter
+from ..hardware.protocol import validate_parameter
 
 
 def read_state(directory, identity):

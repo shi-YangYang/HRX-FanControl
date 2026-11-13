@@ -36,17 +36,24 @@ def stage(destination, release_version, root=ROOT):
 
     package = destination / "usr/lib/hrx-fancontrol/hrx_fancontrol"
     package.mkdir(parents=True)
-    for path in sorted((root / "src/hrx_fancontrol").iterdir()):
+    source = root / "src/hrx_fancontrol"
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        if any(part == "__pycache__" or part.endswith((".egg-info", ".dist-info"))
+               for part in relative.parts):
+            continue
         if path.suffix in (".py", ".yaml") and path.is_file():
-            shutil.copyfile(path, package / path.name)
-            (package / path.name).chmod(0o644)
+            target = package / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+            target.chmod(0o644)
     put("usr/bin/hrx-fancontrol", '''#!/usr/bin/python3
 import sys
 sys.path.insert(0, "/usr/lib/hrx-fancontrol")
 from hrx_fancontrol.main import main
 raise SystemExit(main())
 ''', 0o755)
-    unit = (root / "systemd/hrx-fancontrol.service").read_text()
+    unit = (root / "packaging/systemd/hrx-fancontrol.service").read_text()
     unit = unit.replace("/opt/hrx-fancontrol/.venv/bin/hrx-fancontrol", "/usr/bin/hrx-fancontrol")
     unit = unit.replace("WorkingDirectory=/opt/hrx-fancontrol", "WorkingDirectory=/var/lib/hrx-fancontrol")
     if "/opt/" in unit:
@@ -54,7 +61,8 @@ raise SystemExit(main())
     put("usr/lib/systemd/system/hrx-fancontrol.service", unit)
     put("etc/hrx-fancontrol/config.yaml", "logging:\n  directory: /var/log/hrx-fancontrol\n")
     put("usr/share/doc/hrx-fancontrol/copyright", (root / "LICENSE").read_text())
-    put("usr/share/doc/hrx-fancontrol/hr650x-guide.md", (root / "docs/hr650x-guide.md").read_text())
+    for name in ("hr650x-guide.md", "development.md"):
+        put("usr/share/doc/hrx-fancontrol/" + name, (root / "docs" / name).read_text())
     put("usr/share/doc/hrx-fancontrol/examples/hr650x-observed-sensors.txt",
         (root / "examples/hr650x-observed-sensors.txt").read_text())
     put("DEBIAN/control", f'''Package: hrx-fancontrol
@@ -70,7 +78,7 @@ Description: Temperature monitoring and fan control for Lenovo HR650X
 ''')
     put("DEBIAN/conffiles", "/etc/hrx-fancontrol/config.yaml\n")
     for name in ("preinst", "postinst", "prerm", "postrm"):
-        put("DEBIAN/" + name, (root / "debian" / name).read_text(), 0o755)
+        put("DEBIAN/" + name, (root / "packaging/debian" / name).read_text(), 0o755)
     for directory in destination.rglob("*"):
         if directory.is_dir():
             directory.chmod(0o755)

@@ -4,10 +4,10 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .fan_reader import fan_health
+from ..hardware.fan_reader import fan_health
 from .hysteresis import Hysteresis
 from .safety import Safety
-from .sensors import validate_temperature
+from ..hardware.sensors import validate_temperature
 
 
 def _known_demand(sensors):

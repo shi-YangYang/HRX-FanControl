@@ -3,9 +3,9 @@ import time
 
 from .calibration import (SETTLE_SECONDS, SAMPLE_INTERVAL, STABLE_SAMPLES, STEP_TIMEOUT,
                           profile_ranges, publish_profile, rpm_ranges, validate_profile)
-from .collection import timestamp
-from .ipmi import check_cancelled
-from .protocol import FANS, LEVEL_BYTES, POLICY_LABELS
+from ..hardware.collection import timestamp
+from ..hardware.ipmi import check_cancelled
+from ..hardware.protocol import FANS, LEVEL_BYTES, POLICY_LABELS
 from .executor import ExecutionFailure
 
 

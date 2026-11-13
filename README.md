@@ -68,11 +68,8 @@ Each write is followed immediately by a BMC read. Manual mode and six matching f
 ## Documentation
 
 - [HR650X guide](docs/hr650x-guide.md): fan levels, BMC thresholds, fault handling, calibration, and deployment.
-- [Configuration and logs](docs/hr650x-guide.md#配置与日志) · [Default configuration](config/default.yaml)
-- [Source](src/hrx_fancontrol/) · [Service template](systemd/hrx-fancontrol.service)
-
-[Linux CI](.github/workflows/ci.yml) checks installation, unit tests, and offline CLI replay on Ubuntu 24.04 with Python 3.9 and 3.12. It runs for pull requests targeting `main`.
-
-[Release CD](.github/workflows/release.yml) tests and uploads the `.deb` and checksums after a Release is published in GitHub. See [release and upgrade instructions](docs/hr650x-guide.md#发布版本与升级) for versioning, assets and configuration preservation.
+- [Configuration and logs](docs/hr650x-guide.md#配置与日志) · [Default configuration](src/hrx_fancontrol/default.yaml)
+- [Source](src/hrx_fancontrol/) · [Service template](packaging/systemd/hrx-fancontrol.service)
+- [Development guide](docs/development.md): project layout, local checks, packaging, and releases (Chinese).
 
 [MIT License](LICENSE) · Copyright © 2026 小洋

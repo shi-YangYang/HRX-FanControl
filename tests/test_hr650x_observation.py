@@ -8,10 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hrx_fancontrol.config import load_config
-from hrx_fancontrol.ipmi import CommandResult, ReadOnlyIPMI
+from hrx_fancontrol.hardware.ipmi import CommandResult, ReadOnlyIPMI
 from hrx_fancontrol.main import main
-from hrx_fancontrol.sensors import parse_sensors
-from hrx_fancontrol.thermal_engine import ThermalEngine
+from hrx_fancontrol.hardware.sensors import parse_sensors
+from hrx_fancontrol.policy.thermal_engine import ThermalEngine
 
 
 OBSERVED = (Path(__file__).resolve().parents[1] / "examples/hr650x-observed-sensors.txt").read_text()

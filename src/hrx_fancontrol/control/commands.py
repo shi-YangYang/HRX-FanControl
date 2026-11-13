@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from .lifecycle import RUNTIME_DIR, private_directory
-from .protocol import validate_parameter
+from ..hardware.protocol import validate_parameter
 
 SOCKET_NAME = "control.sock"
 MAX_MESSAGE = 16384

@@ -8,13 +8,13 @@ import threading
 import time
 from pathlib import Path
 
-from .collection import CollectionStats, collect, poll_wait_seconds, timestamp
+from .hardware.collection import CollectionStats, collect, poll_wait_seconds, timestamp
 from .config import ConfigError, load_config
-from .ipmi import CollectionCancelled, ReadOnlyIPMI
-from .logger import AsyncLogger, transition_key
-from .protocol import LEVEL_BYTES
-from .log_record import format_log_record
-from .thermal_engine import ThermalEngine
+from .hardware.ipmi import CollectionCancelled, ReadOnlyIPMI
+from .reporting.logger import AsyncLogger, transition_key
+from .hardware.protocol import LEVEL_BYTES
+from .reporting.log_record import format_log_record
+from .policy.thermal_engine import ThermalEngine
 
 
 L5_ALERT = "警告：当前建议档位已达到 L5。"
@@ -64,7 +64,7 @@ def render(report):
         raw = report["bmc"]["raw_bytes"]
     lines.append(f"BMC raw bytes: {' '.join(raw) if raw else 'unavailable / not read'}")
     if raw:
-        from .protocol import decode_status
+        from .hardware.protocol import decode_status
         lines[-1] = f"BMC raw bytes: {' '.join(raw)}; mode={decode_status(raw)['mode']}"
     for message in report["faults"]:
         lines.append(f"Diagnostic: {message}")
@@ -95,7 +95,7 @@ def main(argv=None):
     if args.action:
         if args.calibrate or args.auto or args.serve or args.service_recover or args.profile or args.once or args.input or args.resume_control or args.config or args.no_log:
             parser.error("Service commands cannot be combined with monitoring/control startup options")
-        from .commands import command_client, decimal_parameter
+        from .control.commands import command_client, decimal_parameter
         try:
             command = {"action": args.setting if args.action == "auto" else args.action}
             if args.action == "manual":
@@ -104,7 +104,7 @@ def main(argv=None):
             if args.json:
                 print(json.dumps(result, ensure_ascii=False, allow_nan=False))
             else:
-                from .command_output import render_command
+                from .reporting.command_output import render_command
                 print(render_command(result))
             return 0 if result["ok"] else 1
         except (ValueError, OSError) as exc:
@@ -128,7 +128,7 @@ def main(argv=None):
         if args.no_log:
             config["logging"]["enabled"] = False
         if controlling:
-            from .control_runtime import run_control
+            from .control.control_runtime import run_control
             return run_control(args, config)
         source = args.input.read_text(encoding="utf-8") if args.input else None
         logger = AsyncLogger(config["logging"])

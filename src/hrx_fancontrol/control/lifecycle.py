@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from .calibration import read_json
-from .protocol import LEVEL_BYTES, level_for_parameter, validate_parameter
+from ..hardware.protocol import LEVEL_BYTES, level_for_parameter, validate_parameter
 
 RUNTIME_DIR = Path("/run/hrx-fancontrol")
 STATE_DIR = Path("/var/lib/hrx-fancontrol")

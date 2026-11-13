@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,7 +23,24 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual((root / "DEBIAN/conffiles").read_text(), "/etc/hrx-fancontrol/config.yaml\n")
             self.assertIn("python3-yaml (>= 6.0)", (root / "DEBIAN/control").read_text())
             self.assertEqual((root / "usr/bin/hrx-fancontrol").stat().st_mode & 0o777, 0o755)
-            self.assertTrue((root / "usr/lib/hrx-fancontrol/hrx_fancontrol/default.yaml").is_file())
+            library = root / "usr/lib/hrx-fancontrol"
+            package = library / "hrx_fancontrol"
+            source = build_deb.ROOT / "src/hrx_fancontrol"
+            expected = {path.relative_to(source) for path in source.rglob("*")
+                        if path.is_file() and path.suffix in (".py", ".yaml")
+                        and not any(part == "__pycache__" or part.endswith((".egg-info", ".dist-info"))
+                                    for part in path.relative_to(source).parts)}
+            self.assertEqual({path.relative_to(package) for path in package.rglob("*") if path.is_file()},
+                             expected)
+            for relative in expected:
+                self.assertEqual((package / relative).read_bytes(), (source / relative).read_bytes())
+            for group in ("hardware", "policy", "control", "reporting"):
+                self.assertTrue((package / group / "__init__.py").is_file())
+            self.assertTrue((package / "default.yaml").is_file())
+            for name in ("hr650x-guide.md", "development.md"):
+                document = root / "usr/share/doc/hrx-fancontrol" / name
+                self.assertTrue(document.is_file())
+                self.assertEqual(document.read_text(), (build_deb.ROOT / "docs" / name).read_text())
             unit = (root / "usr/lib/systemd/system/hrx-fancontrol.service").read_text()
             self.assertNotIn("/opt/", unit)
             self.assertNotIn("--profile", unit)
@@ -32,6 +50,33 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in (root / "etc/hrx-fancontrol").iterdir()), ["config.yaml"])
             for name in ("preinst", "postinst", "prerm", "postrm"):
                 self.assertEqual((root / "DEBIAN" / name).stat().st_mode & 0o777, 0o755)
+            replay = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", '''
+import importlib
+from pathlib import Path
+import runpy
+import sys
+library = Path(sys.argv.pop(1)).resolve()
+sys.path.insert(0, str(library))
+package = library / "hrx_fancontrol"
+for path in sorted(package.rglob("*.py")):
+    if path.name == "__main__.py":
+        continue
+    parts = path.relative_to(library).with_suffix("").parts
+    name = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+    module = importlib.import_module(name)
+    assert Path(module.__file__).resolve() == path.resolve(), module.__file__
+runpy.run_module("hrx_fancontrol", run_name="__main__")
+''', str(library), "--once", "--input",
+                 str(root / "usr/share/doc/hrx-fancontrol/examples/hr650x-observed-sensors.txt"),
+                 "--no-log", "--json"],
+                cwd=root, text=True, capture_output=True, timeout=10)
+            self.assertEqual(replay.returncode, 0, replay.stderr)
+            report = json.loads(replay.stdout)
+            self.assertEqual(report["source"], "offline-snapshot")
+            self.assertEqual(report["mode"], "dry-run")
+            self.assertFalse(report["applied"])
+            self.assertEqual(len(report["fans"]), 6)
 
     def test_rejects_invalid_or_mismatched_tag_before_git(self):
         with patch.object(release, "run") as git:

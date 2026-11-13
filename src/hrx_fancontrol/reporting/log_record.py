@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from .ipmi import DIAGNOSTIC_TAIL_CHARS
+from ..hardware.ipmi import DIAGNOSTIC_TAIL_CHARS
 
 
 _REASONS = {

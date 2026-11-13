@@ -1,8 +1,8 @@
 """Actuation state machine: sending is not evidence that a fan setting took effect."""
 import time
 
-from .ipmi import check_cancelled, parse_control_status
-from .protocol import LEVEL_BYTES, matches_level, matches_parameter, level_for_parameter, validate_parameter
+from ..hardware.ipmi import check_cancelled, parse_control_status
+from ..hardware.protocol import LEVEL_BYTES, matches_level, matches_parameter, level_for_parameter, validate_parameter
 
 
 CONFIRM_TIMEOUT = 90.0

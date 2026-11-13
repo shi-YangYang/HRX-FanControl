@@ -6,13 +6,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from hrx_fancontrol.collection import CollectionStats, collect
+from hrx_fancontrol.hardware.collection import CollectionStats, collect
 from hrx_fancontrol.config import load_config
-from hrx_fancontrol.ipmi import CollectionCancelled, CommandResult
+from hrx_fancontrol.hardware.ipmi import CollectionCancelled, CommandResult
 from hrx_fancontrol.main import render
-from hrx_fancontrol.safety import Safety
-from hrx_fancontrol.sensors import parse_sensors
-from hrx_fancontrol.thermal_engine import ThermalEngine
+from hrx_fancontrol.policy.safety import Safety
+from hrx_fancontrol.hardware.sensors import parse_sensors
+from hrx_fancontrol.policy.thermal_engine import ThermalEngine
 
 
 SAMPLE = (Path(__file__).resolve().parents[1] / "examples/hr650x-sensors.txt").read_text()
@@ -57,7 +57,7 @@ class ReadFailurePolicyTest(unittest.TestCase):
             calls.append("alert")
             self.alerts.append(json.loads(json.dumps(report)))
 
-        with patch("hrx_fancontrol.collection.time.monotonic", return_value=now):
+        with patch("hrx_fancontrol.hardware.collection.time.monotonic", return_value=now):
             return collect(FakeIPMI(), self.engine, self.config, on_alert=alert, stop=stop, stats=self.stats)
 
     def warm(self):

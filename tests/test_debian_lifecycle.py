@@ -35,7 +35,7 @@ class MaintainerScriptTests(unittest.TestCase):
 
     def run_script(self, name, action):
         # Rewrite fixed runtime locations in a temporary copy, never host /run.
-        text = (ROOT / "debian" / name).read_text()
+        text = (ROOT / "packaging/debian" / name).read_text()
         text = text.replace("/run/hrx-fancontrol-package", str(self.root / "package-state"))
         text = text.replace("/run/systemd/system", str(self.root / "systemd"))
         script = self.root / name
@@ -79,7 +79,7 @@ class MaintainerScriptTests(unittest.TestCase):
         self.stub("deb-systemd-helper", "exec perl " + shlex.quote(HELPER) + ' "$@"\n')
         unit = self.root / "usr/lib/systemd/system/hrx-fancontrol.service"
         unit.parent.mkdir(parents=True)
-        unit.write_text((ROOT / "systemd/hrx-fancontrol.service").read_text())
+        unit.write_text((ROOT / "packaging/systemd/hrx-fancontrol.service").read_text())
         link = self.root / "etc/systemd/system/multi-user.target.wants/hrx-fancontrol.service"
         result = self.run_script("postinst", "configure")
         self.assertEqual(result.returncode, 0, result.stderr)

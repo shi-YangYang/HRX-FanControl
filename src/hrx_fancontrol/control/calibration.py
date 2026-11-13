@@ -7,7 +7,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from .protocol import FANS, LEVEL_BYTES, POLICY_LABELS, matches_level
+from ..hardware.protocol import FANS, LEVEL_BYTES, POLICY_LABELS, matches_level
 
 SETTLE_SECONDS = 10.0
 SAMPLE_INTERVAL = 5.0

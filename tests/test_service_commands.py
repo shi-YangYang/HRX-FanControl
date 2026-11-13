@@ -10,14 +10,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from hrx_fancontrol.commands import (CommandServer, Request, command_client, decimal_parameter,
+from hrx_fancontrol.control.commands import (CommandServer, Request, command_client, decimal_parameter,
                                     receive, send, validate_command, MAX_MESSAGE)
-from hrx_fancontrol.ipmi import CommandResult
-from hrx_fancontrol.executor import Executor, ExternalOverride, ExecutionFailure, OwnershipUnverified
-from hrx_fancontrol.lifecycle import Ownership
-from hrx_fancontrol.protocol import ControlIPMI, matches_parameter
-from hrx_fancontrol.service import ServiceController
-from hrx_fancontrol.service_state import ServiceState, recovery_allowed
+from hrx_fancontrol.hardware.ipmi import CommandResult
+from hrx_fancontrol.control.executor import Executor, ExternalOverride, ExecutionFailure, OwnershipUnverified
+from hrx_fancontrol.control.lifecycle import Ownership
+from hrx_fancontrol.hardware.protocol import ControlIPMI, matches_parameter
+from hrx_fancontrol.control.service import ServiceController
+from hrx_fancontrol.control.service_state import ServiceState, recovery_allowed
 from hrx_fancontrol.config import load_config
 from hrx_fancontrol.main import main
 from test_controlled_execution import IDENTITY, profile, report, raw, success, status_result
@@ -237,7 +237,7 @@ class ServiceTests(unittest.TestCase):
             self.assertFalse(self.controller.allow_fallback)
 
     def test_manual_failure_stays_off_and_is_eligible_for_one_l3(self):
-        from hrx_fancontrol.ipmi import CommandResult
+        from hrx_fancontrol.hardware.ipmi import CommandResult
         self.ipmi.set_parameter.return_value = CommandResult(("write",), "", "", 1, "failed", .1)
         with self.assertRaises(ExecutionFailure):
             self.controller.apply({"action": "manual", "parameter": 25})
@@ -400,8 +400,8 @@ class SocketTests(unittest.TestCase):
             self.assertTrue(path.is_symlink())
 
     def test_cli_client_only_and_old_floor_rejected(self):
-        with patch("hrx_fancontrol.commands.command_client", return_value={"ok": True, "message": "ok"}) as client, \
-             patch("hrx_fancontrol.protocol.ControlIPMI.set_parameter") as write, \
+        with patch("hrx_fancontrol.control.commands.command_client", return_value={"ok": True, "message": "ok"}) as client, \
+             patch("hrx_fancontrol.hardware.protocol.ControlIPMI.set_parameter") as write, \
              patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
             self.assertEqual(main(["manual", "25"]), 0)
             client.assert_called_once_with({"action": "manual", "parameter": 25})

@@ -11,8 +11,8 @@
 ```sh
 mkdir -p dist
 COPYFILE_DISABLE=1 tar -czf dist/hrx-fancontrol-source.tar.gz \
-  --exclude='__pycache__' --exclude='*.pyc' \
-  README.md README.zh-CN.md LICENSE pyproject.toml src config examples docs systemd
+  --exclude='__pycache__' --exclude='*.pyc' --exclude='*.egg-info' \
+  README.md README.zh-CN.md LICENSE pyproject.toml src examples docs packaging scripts tests
 scp dist/hrx-fancontrol-source.tar.gz user@SERVER_IP:~/
 ```
 
@@ -106,7 +106,7 @@ Inlet 下限预警为 7°C，NIC 下限三列均为 0°C；这些数值下限保
 
 ## 配置与日志
 
-[config/default.yaml](../config/default.yaml) 链接到包内默认配置。自定义文件只需写要覆盖的字段，例如保存为 `profile.yaml`：
+[默认配置](../src/hrx_fancontrol/default.yaml) 随程序包提供。自定义文件只需写要覆盖的字段，例如保存为 `profile.yaml`：
 
 ```yaml
 logging:
@@ -283,7 +283,7 @@ sudo tee /etc/hrx-fancontrol/config.yaml >/dev/null <<'YAML'
 logging:
   directory: /var/log/hrx-fancontrol
 YAML
-sudo install -m 644 /opt/hrx-fancontrol/systemd/hrx-fancontrol.service /etc/systemd/system/
+sudo install -m 644 /opt/hrx-fancontrol/packaging/systemd/hrx-fancontrol.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now hrx-fancontrol
 sudo systemctl status hrx-fancontrol
@@ -335,15 +335,7 @@ systemctl cat hrx-fancontrol
 
 ## 发布版本与升级
 
-维护者先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，创建 PR，等待 Linux CI 成功后再合入 `main`。
-
-1. 在 GitHub 仓库打开 **Releases → Draft a new release**。
-2. 新建标签，例如 `v0.1.0`，Target 选 `main`，填写发布说明，然后 **Publish release**。
-3. 在 Actions 等待 **Release Debian package** 成功。它测试标签对应代码、构建并检查 Linux 安装/升级，再把 `.deb` 与 `SHA256SUMS` 加到这条 Release。只保存草稿不会触发。
-
-标签必须是 `vX.Y.Z`，与源码两处版本一致，提交须已进入 `main`。此流程要求仓库关闭 **immutable releases**，因为附件在发布后才生成。构建失败时先看 Actions 日志，Release 页面暂时没有可安装附件；需要改代码时发布新版本。相同源码的失败任务可以重跑；已存在且内容相同的附件会跳过，内容不同则拒绝覆盖。
-
-CI 在 Ubuntu 24.04 临时 runner 上安装包，使用测试服务进程验证首装、运行/停止及启用/禁用四种升级状态、卸载与配置保留；测试不访问 IPMI，不代表 HR650X 实机控制已验证。
+维护者发布步骤见[开发说明](development.md#发布版本)。
 
 用户升级时下载新版本和校验文件，然后：
 
