@@ -80,7 +80,8 @@ def validate(c):
         value = c[section][key]
         if type(value) is not type(expected) or value != expected:
             raise ConfigError(f"This prototype requires {section}.{key} = {expected!r}")
-    for section, key in (("hysteresis", "enabled"), ("logging", "enabled"), ("ipmi", "read_control_status")):
+    for section, key in (("hysteresis", "enabled"), ("logging", "enabled"), ("ipmi", "read_control_status"),
+                         ("ipmi", "sensor_cache_enabled")):
         if type(c[section][key]) is not bool:
             raise ConfigError(f"{section}.{key} must be a boolean")
     for section, key in (

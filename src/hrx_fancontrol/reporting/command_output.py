@@ -11,6 +11,10 @@ def render_command(result):
     if state["manual_parameter"] is not None:
         lines.append(f"手动目标：{state['manual_parameter']}（0x{state['manual_parameter']:02x}，保存的设置意图）")
     control = state["control"]
+    if state.get("activity"):
+        activity = {"sampling": "正在采集", "confirmation": "正在确认设置",
+                    "control": "正在处理调控", "command": "正在处理指令"}.get(state["activity"], "正在处理")
+        lines.append(activity + "；以下为最近发布的缓存状态。")
     lines.append("设置已确认：BMC 回读匹配。" if control["verified"] else
                  f"设置尚未确认；状态：{control['status']}")
     if state["last_sample_time"]:

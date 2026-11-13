@@ -43,6 +43,7 @@ class ProfileTest(unittest.TestCase):
             "ipmi: {command_timeout_seconds: 30}", "ipmi: {status_timeout_seconds: 30}",
             "ipmi: {status_timeout_seconds: .nan}", "ipmi: {status_timeout_seconds: true}",
             "ipmi: {status_timeout_seconds: 0}", "ipmi: {status_timeout_seconds: 10}",
+            "ipmi: {sensor_cache_enabled: 'false'}", "ipmi: {sensor_cache_enabled: 1}",
             "safety: {read_failure_count: 0}", "safety: {read_failure_count: true}",
             "safety: {read_failure_count: 1.5}", "safety: {read_failure_timeout_seconds: 0}",
             "safety: {read_failure_timeout_seconds: .nan}", "safety: {read_failure_timeout_seconds: true}",
@@ -69,6 +70,7 @@ class ProfileTest(unittest.TestCase):
             self.assertEqual(c["controller"]["poll_interval_seconds"], 15)
             self.assertEqual(c["ipmi"]["command_timeout_seconds"], 20)
             self.assertEqual(c["ipmi"]["status_timeout_seconds"], 3)
+            self.assertTrue(c["ipmi"]["sensor_cache_enabled"])
             self.assertEqual(c["safety"]["sensor_timeout_seconds"], 30)
             self.assertEqual(c["safety"]["recovery_success_count"], 5)
             self.assertNotIn("startup_level", c["safety"])
@@ -78,6 +80,7 @@ class ProfileTest(unittest.TestCase):
             self.assertEqual(c["safety"]["read_failure_timeout_seconds"], 300)
             self.assertEqual(c["safety"]["read_failure_level"], 3)
         self.assertEqual(self.profile("safety: {recovery_success_count: 2}")["safety"]["recovery_success_count"], 2)
+        self.assertFalse(self.profile("ipmi: {sensor_cache_enabled: false}")["ipmi"]["sensor_cache_enabled"])
 
 
 class ParserTest(unittest.TestCase):

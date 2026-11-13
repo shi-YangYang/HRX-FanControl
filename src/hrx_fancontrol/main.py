@@ -120,6 +120,7 @@ def main(argv=None):
     if args.input and not args.once:
         parser.error("--input requires --once; replaying an unchanged file as fresh sensor data is unsafe")
     logger = None
+    ipmi = None
     handlers = {}
     stop = threading.Event()
     exit_code = 0
@@ -136,6 +137,8 @@ def main(argv=None):
         stats = CollectionStats()
         ipmi = ReadOnlyIPMI(config["ipmi"]["command_timeout_seconds"],
                             config["ipmi"]["status_timeout_seconds"], stop)
+        if not args.once and config["ipmi"]["sensor_cache_enabled"]:
+            ipmi.enable_sensor_cache((*config["sensors"], *config["fan"]["installed"]))
         for sig in (signal.SIGINT, signal.SIGTERM):
             handlers[sig] = signal.signal(sig, lambda *_: stop.set())
         previous_key, l5_notified = None, False
@@ -163,7 +166,7 @@ def main(argv=None):
             now = time.monotonic()
             if key != previous_key or now - last_log >= config["logging"]["interval_seconds"]:
                 event = "transition" if key != previous_key else "summary"
-                logger.emit(format_log_record(report, event, now - start))
+                logger.emit(format_log_record(report, event))
                 last_log = now
             previous_key = key
             print(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report), flush=True)
@@ -187,6 +190,8 @@ def main(argv=None):
     finally:
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
+        if ipmi:
+            ipmi.close()
         if logger:
             logger.close()
             if logger.error or logger.dropped:

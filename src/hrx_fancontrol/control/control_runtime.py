@@ -2,7 +2,6 @@
 import json
 import os
 import sys
-import threading
 import time
 
 from .calibration_run import CalibrationAborted, run_calibration
@@ -11,8 +10,8 @@ from .executor import ExecutionFailure, Executor, ExternalOverride, OwnershipUnv
 from ..hardware.identity import machine_identity, validate_control_config
 from ..hardware.ipmi import CollectionCancelled, check_cancelled
 from .lifecycle import (OVERRIDE_EXIT_STATUS, ControlSuspended, Ownership,
-                        StopSignals, WriterLock, control_state_directory, notify)
-from ..reporting.logger import AsyncLogger, transition_key
+                        StopEvent, StopSignals, WriterLock, control_state_directory, notify)
+from ..reporting.logger import AsyncLogger, journal_line, transition_key
 from ..reporting.log_record import format_log_record
 from ..hardware.protocol import ControlIPMI
 from ..policy.thermal_engine import ThermalEngine
@@ -37,9 +36,8 @@ def fallback(executor, collect_next, wait, emit, clock=time.monotonic):
 
 
 def run_control(args, config):
-    stop = threading.Event()
     logger = None
-    owner = executor = controller = None
+    owner = executor = controller = ipmi = None
     stats = CollectionStats()
     last_report = None
     previous_key, last_log = None, float("-inf")
@@ -47,12 +45,17 @@ def run_control(args, config):
     code = 0
     normal_stop = False
     yielded_exit = False
+    detailed_output = args.json or sys.stdout.isatty()
 
     def output(value):
         try:
             print(value, flush=True)
         except BrokenPipeError:
             pass  # A closed terminal pipe must not disable cooling or invent an actuator error.
+
+    def journal(record):
+        if record["event"] != "safety_alert":
+            output(journal_line(record))  # L5 already has one immediate stderr notification.
 
     def notify_l5(level):
         nonlocal l5_notified
@@ -63,6 +66,8 @@ def run_control(args, config):
             l5_notified = False
 
     def emit(event, control):
+        if controller:
+            controller.publish_status()
         if event == "write_started":
             notify_l5(control.get("target_level"))
         record = {"schema_version": 2, "time": timestamp(), "event": event, "run_id": stats.run_id,
@@ -72,6 +77,7 @@ def run_control(args, config):
                   "control": {key: value for key, value in control.items()
                               if key != "command" or value and (value.get("error") or value.get("returncode") != 0)},
                   "message": {"write_started": "开始发送档位，BMC 设置尚未确认。",
+                              "service_started": "控制服务已启动。", "mode_changed": "控制模式已更新。",
                               "write_sent": "命令已返回，等待 BMC 回读。", "verified": "设置已确认，BMC 回读匹配。",
                               "write_failed": "写入失败，是否生效可能未知。", "verification_failed": "档位验证失败。",
                               "shutdown": "控制已停止，保持最后设置，不追加写入。",
@@ -85,8 +91,9 @@ def run_control(args, config):
                               "ownership_unverified": "等待核实上次运行的 BMC 设置，未发送调速命令。",
                               "fallback_failed": f"异常兜底 L{FALLBACK_LEVEL} 失败，当前物理状态未确认。"}.get(event, event)}
         logger.emit(record)
-        output(json.dumps({**record, "control": control}, ensure_ascii=False, allow_nan=False) if args.json else
-               f"{record['time']} {record['message']} {json.dumps(control, ensure_ascii=False, allow_nan=False)}")
+        if detailed_output:
+            output(json.dumps({**record, "control": control}, ensure_ascii=False, allow_nan=False) if args.json else
+                   f"{record['time']} {record['message']} {json.dumps(control, ensure_ascii=False, allow_nan=False)}")
 
     def wait(seconds):
         if stop.wait(seconds):
@@ -119,6 +126,7 @@ def run_control(args, config):
         if not os.environ.get("INVOCATION_ID") or os.environ.get("SERVICE_RESULT") not in (
                 "exit-code", "signal", "core-dump", "watchdog", "timeout", "oom-kill"):
             return 0
+    stop = StopEvent()
     with StopSignals(stop):
         try:
             validate_control_config(config)
@@ -129,8 +137,10 @@ def run_control(args, config):
             profile = None  # Service confirmation uses BMC settings, not a machine calibration file.
             if args.profile:
                 print("--profile 已忽略；调速服务无需校准文件。", file=sys.stderr)
-            logger = AsyncLogger(config["logging"])
+            logger = AsyncLogger(config["logging"], output=None if detailed_output else journal)
             with WriterLock() as lock:
+                if not args.service_recover and config["ipmi"]["sensor_cache_enabled"]:
+                    ipmi.enable_sensor_cache((*config["sensors"], *config["fan"]["installed"]), lock.directory)
                 state_directory = control_state_directory()
                 previous_confirmed = None
                 if args.service_recover:
@@ -166,7 +176,6 @@ def run_control(args, config):
                     nonlocal last_report, l5_notified
                     last_report = collect(ipmi, selected_engine or engine, config, on_alert=alert if early else None,
                                           stop=stop, stats=stats)
-                    notify("WATCHDOG=1")
                     return last_report
 
                 try:
@@ -192,12 +201,14 @@ def run_control(args, config):
                                 logger.emit(format_log_record(report, "transition" if key != previous_key else "summary"))
                                 last_log = now
                             previous_key = key
-                            from ..main import render
-                            output(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report))
+                            if detailed_output:
+                                from ..main import render
+                                output(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report))
 
                         controller = ServiceController(executor, config, state_directory,
                                                        lambda engine, early: collect_next(early, engine), publish)
-                        with CommandServer(lock.directory) as server:
+                        emit("service_started", executor.snapshot())
+                        with CommandServer(lock.directory, controller.cached_status, stop.wake) as server:
                             controller.run(server)
                 except CollectionCancelled:
                     code, normal_stop = 0, True
@@ -247,6 +258,14 @@ def run_control(args, config):
             print(f"hrx-fancontrol: {exc}", file=sys.stderr)
             code = 1
         finally:
+            try:
+                if ipmi:
+                    ipmi.close()
+            except OSError as exc:
+                print(f"Unable to remove sensor cache: {exc}", file=sys.stderr)
+                code = 1
+            finally:
+                stop.close()
             if logger:
                 try:
                     logger.close()

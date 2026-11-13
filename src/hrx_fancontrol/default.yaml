@@ -45,6 +45,7 @@ ipmi:
   command_timeout_seconds: 20
   status_timeout_seconds: 3
   read_control_status: true
+  sensor_cache_enabled: true  # Reuse SDR metadata during repeated sampling; values stay live.
 
 # Four inclusive entry temperatures for L2, L3, L4, L5.
 # Fractional readings use these same cutoffs (e.g. CPU 55.9 remains L1).

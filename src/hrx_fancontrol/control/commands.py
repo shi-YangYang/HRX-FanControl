@@ -65,7 +65,8 @@ class Request:
     def __init__(self, command):
         self.command, self.result = command, None
         self.done = threading.Event()
-        self.deadline = time.monotonic() + CLIENT_TIMEOUT - 2
+        self.queued_at = time.monotonic()
+        self.deadline = self.queued_at + CLIENT_TIMEOUT - 2
 
     def reply(self, result):
         self.result = result
@@ -73,10 +74,13 @@ class Request:
 
 
 class CommandServer:
-    def __init__(self, directory):
+    def __init__(self, directory, status=None, wake=None):
         self.path = Path(directory) / SOCKET_NAME
+        self.status = status
         self.requests = queue.Queue(maxsize=16)
-        self.wake, self.stopped = threading.Event(), threading.Event()
+        self.wake, self.stopped = wake or threading.Event(), threading.Event()
+        self.queue_lock = threading.Lock()
+        self.waiting = set()
         self.slots = threading.BoundedSemaphore(16)
         self.stream = None
         self.workers = set()
@@ -95,7 +99,6 @@ class CommandServer:
             os.chmod(self.path, 0o600)
             self.inode = self.path.stat().st_ino
             self.stream.listen(16)
-            self.stream.settimeout(.2)
             self.thread = threading.Thread(target=self._accept, daemon=True)
             self.thread.start()
             return self
@@ -107,9 +110,10 @@ class CommandServer:
         while not self.stopped.is_set():
             try:
                 stream, _ = self.stream.accept()
-            except socket.timeout:
-                continue
             except OSError:
+                return
+            if self.stopped.is_set():
+                stream.close()
                 return
             if not self.slots.acquire(False):
                 stream.close()
@@ -125,12 +129,19 @@ class CommandServer:
                 stream.settimeout(2)
                 try:
                     request = Request(validate_command(receive(stream)))
-                    self.requests.put_nowait(request)
-                    self.wake.set()
-                    while not request.done.wait(.2) and not self.stopped.is_set():
-                        if time.monotonic() > request.deadline:
-                            break
-                    result = request.result or {"ok": False, "message": "结果尚未确认，请用 status 查看；不要自动重发。"}
+                    if request.command["action"] == "status" and self.status is not None:
+                        result = {"ok": True, "message": "最近一次采样与控制状态（缓存）。", "status": self.status()}
+                    else:
+                        with self.queue_lock:
+                            if self.stopped.is_set():
+                                raise ValueError("控制服务已停止。")
+                            self.requests.put_nowait(request)
+                            self.waiting.add(request)
+                            self.wake.set()
+                        request.done.wait(max(0, request.deadline - time.monotonic()))
+                        with self.queue_lock:
+                            self.waiting.discard(request)
+                        result = request.result or {"ok": False, "message": "结果尚未确认，请用 status 查看；不要自动重发。"}
                 except (ValueError, UnicodeError, queue.Full, OSError) as exc:
                     result = {"ok": False, "message": str(exc)}
                 try:
@@ -144,11 +155,13 @@ class CommandServer:
 
     def pending(self):
         while True:
-            try:
-                request = self.requests.get_nowait()
-            except queue.Empty:
-                self.wake.clear()
-                return
+            with self.queue_lock:
+                try:
+                    request = self.requests.get_nowait()
+                except queue.Empty:
+                    # Enqueue and clear share a lock: a new command cannot lose its wakeup.
+                    self.wake.clear()
+                    return
             if time.monotonic() <= request.deadline:
                 yield request
             else:
@@ -156,12 +169,29 @@ class CommandServer:
 
     def __exit__(self, *_):
         self.stopped.set()
+        self.wake.set()
+        with self.queue_lock:
+            for request in self.waiting:
+                if not request.done.is_set():
+                    request.reply({"ok": False, "message": "服务已停止，指令结果请重新核对。"})
+        # Wake blocking accept portably, including platforms where close alone does not.
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as wake:
+                wake.settimeout(.2)
+                wake.connect(str(self.path))
+        except OSError:
+            pass
+        try:
+            self.stream.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.stream.close()
         self.thread.join(1)
         with self.workers_lock:
             workers = list(self.workers)
+        deadline = time.monotonic() + 2.5
         for worker in workers:
-            worker.join(2.5)
+            worker.join(max(0, deadline - time.monotonic()))
         if self.path.exists() and self.path.lstat().st_ino == self.inode:
             self.path.unlink()
 

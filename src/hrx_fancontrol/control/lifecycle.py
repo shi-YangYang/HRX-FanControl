@@ -2,10 +2,12 @@
 import hashlib
 import json
 import os
+import select
 import signal
 import socket
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 from .calibration import read_json
@@ -191,6 +193,60 @@ class Ownership:
         owner = cls(directory, identity, profile, data.get("run_id"))
         owner.data, owner.active = data, True
         return owner
+
+
+class Wakeup:
+    """A readable socket wakes select without acquiring a lock in signal handlers."""
+    def __init__(self):
+        self.reader, self.writer = socket.socketpair()
+        self.reader.setblocking(False)
+        self.writer.setblocking(False)
+
+    def set(self):
+        try:
+            self.writer.send(b"\0")
+        except (BlockingIOError, OSError):
+            pass  # A full socket is already readable; close is a terminal state.
+
+    def clear(self):
+        try:
+            while self.reader.recv(4096):
+                pass
+        except BlockingIOError:
+            pass
+
+    def wait(self, timeout=None):
+        return bool(select.select([self.reader], [], [], timeout)[0])
+
+    def close(self):
+        self.reader.close()
+        self.writer.close()
+
+
+class StopEvent:
+    """One-way cancellation and a signal-safe wakeup for the hardware loop."""
+    def __init__(self):
+        self.stopped = False
+        self.wake = Wakeup()
+
+    def is_set(self):
+        return self.stopped
+
+    def set(self):
+        self.stopped = True
+        self.wake.set()
+
+    def wait(self, timeout=None):
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while not self.stopped:
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            if not self.wake.wait(remaining):
+                break
+            self.wake.clear()
+        return self.stopped
+
+    def close(self):
+        self.wake.close()
 
 
 class StopSignals:

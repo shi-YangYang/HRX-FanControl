@@ -276,6 +276,7 @@ class CollectionStabilityTest(unittest.TestCase):
 
         output = io.StringIO()
         with patch("hrx_fancontrol.main.threading.Event", return_value=stop), \
+                patch.object(ReadOnlyIPMI, "enable_sensor_cache"), \
                 patch("hrx_fancontrol.main.AsyncLogger", MemoryLogger), \
                 patch("hrx_fancontrol.main.time.monotonic", side_effect=lambda: clock[0]), \
                 patch.object(stop, "wait", side_effect=wait), \
@@ -303,7 +304,9 @@ class CollectionStabilityTest(unittest.TestCase):
 class CLICancellationTest(FakeIPMIProgram):
     def cli(self, config):
         path = self.root / "profile.yaml"
-        path.write_text(config)
+        # These cancellation fixtures exercise the original sensor/status subprocesses.
+        # The cached reader has its own actual-subprocess cancellation/timeout tests.
+        path.write_text(config + "ipmi:\n  sensor_cache_enabled: false\n")
         process = subprocess.Popen([sys.executable, "-m", "hrx_fancontrol", "--config", str(path), "--json"],
                                    cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
