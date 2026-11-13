@@ -10,12 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hrx_fancontrol.config import ConfigError, load_config
-from hrx_fancontrol.hysteresis import Hysteresis
-from hrx_fancontrol.ipmi import CommandResult, ReadOnlyIPMI, parse_control_status
-from hrx_fancontrol.logger import AsyncLogger, DailyWriter, transition_key
+from hrx_fancontrol.policy.hysteresis import Hysteresis
+from hrx_fancontrol.hardware.ipmi import CommandResult, ReadOnlyIPMI, parse_control_status
+from hrx_fancontrol.reporting.logger import AsyncLogger, DailyWriter, transition_key
 from hrx_fancontrol.main import L5_ALERT, collect, main, render
-from hrx_fancontrol.sensors import parse_sensors, validate_temperature
-from hrx_fancontrol.thermal_engine import ThermalEngine
+from hrx_fancontrol.hardware.sensors import parse_sensors, validate_temperature
+from hrx_fancontrol.policy.thermal_engine import ThermalEngine
 
 
 SAMPLE = (Path(__file__).resolve().parents[1] / "examples/hr650x-sensors.txt").read_text()
@@ -480,7 +480,7 @@ class LoggingAndCLITest(unittest.TestCase):
                             and "PCH_Temp: BMC 温度告警" in record.get("issues", []) for record in records))
         self.assertFalse(any(record["applied"] for record in records))
 
-    @patch("hrx_fancontrol.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
+    @patch("hrx_fancontrol.hardware.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
     def test_advisory_bmc_alarm_remains_diagnostic_without_notification(self, popen):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -542,7 +542,7 @@ class LoggingAndCLITest(unittest.TestCase):
                 logger.close()
             self.assertEqual(logger.error, "disk full")
 
-    @patch("hrx_fancontrol.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
+    @patch("hrx_fancontrol.hardware.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
     def test_offline_cli_end_to_end_without_hardware(self, popen):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sample.txt"
@@ -566,7 +566,7 @@ class LoggingAndCLITest(unittest.TestCase):
             self.assertFalse(report["applied"])
             popen.assert_not_called()
 
-    @patch("hrx_fancontrol.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
+    @patch("hrx_fancontrol.hardware.ipmi.subprocess.Popen", side_effect=AssertionError("offline mode started IPMI"))
     def test_offline_invalid_data_reports_null_recommendation_and_logs_it(self, popen):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

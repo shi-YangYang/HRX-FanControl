@@ -10,19 +10,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from hrx_fancontrol.calibration import load_profile, profile_ranges, publish_profile, validate_profile
-from hrx_fancontrol.calibration_run import CalibrationAborted, run_calibration
-from hrx_fancontrol.collection import CollectionStats, collect
+from hrx_fancontrol.control.calibration import load_profile, profile_ranges, publish_profile, validate_profile
+from hrx_fancontrol.control.calibration_run import CalibrationAborted, run_calibration
+from hrx_fancontrol.hardware.collection import CollectionStats, collect
 from hrx_fancontrol.config import load_config
-from hrx_fancontrol.control_runtime import fallback, run_control
-from hrx_fancontrol.executor import ExecutionFailure, Executor, ExternalOverride, OwnershipUnverified
-from hrx_fancontrol.identity import machine_identity, validate_control_config
-from hrx_fancontrol.ipmi import CollectionCancelled, CommandResult, ReadOnlyIPMI
-from hrx_fancontrol.lifecycle import OVERRIDE_EXIT_STATUS, ControlSuspended, Ownership, WriterLock
+from hrx_fancontrol.control.control_runtime import fallback, run_control
+from hrx_fancontrol.control.executor import ExecutionFailure, Executor, ExternalOverride, OwnershipUnverified
+from hrx_fancontrol.hardware.identity import machine_identity, validate_control_config
+from hrx_fancontrol.hardware.ipmi import CollectionCancelled, CommandResult, ReadOnlyIPMI
+from hrx_fancontrol.control.lifecycle import OVERRIDE_EXIT_STATUS, ControlSuspended, Ownership, WriterLock
 from hrx_fancontrol.main import main, render
-from hrx_fancontrol.protocol import ControlIPMI, FANS, LEVEL_BYTES, POLICY_LABELS, matches_level
-from hrx_fancontrol.safety import Safety
-from hrx_fancontrol.thermal_engine import ThermalEngine
+from hrx_fancontrol.hardware.protocol import ControlIPMI, FANS, LEVEL_BYTES, POLICY_LABELS, matches_level
+from hrx_fancontrol.policy.safety import Safety
+from hrx_fancontrol.policy.thermal_engine import ThermalEngine
 
 IDENTITY = {"product": "ThinkSystem HR650X", "machine_uuid": "12345678-1234-1234-1234-123456789abc",
             "manufacturer_id": 8774, "product_id": 503, "firmware": "11.99"}
@@ -131,7 +131,7 @@ class EvidenceTests(unittest.TestCase):
             (root / "product_name").write_text(IDENTITY["product"])
             (root / "product_uuid").write_text(IDENTITY["machine_uuid"])
             ipmi = Mock()
-            with patch("hrx_fancontrol.identity.platform.system", return_value="Linux"):
+            with patch("hrx_fancontrol.hardware.identity.platform.system", return_value="Linux"):
                 for manufacturer_id, product_id in ((8774, 502), (8774, 503), (8774, 501), (8774, 504), (1, 503)):
                     with self.subTest(manufacturer_id=manufacturer_id, product_id=product_id):
                         ipmi.identity_info.return_value = bmc_info(product_id, manufacturer_id)
@@ -156,7 +156,7 @@ class EvidenceTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             machine_identity(ipmi, root)
                 (root / "product_uuid").write_text(IDENTITY["machine_uuid"])
-            with patch("hrx_fancontrol.identity.platform.system", return_value="Darwin"):
+            with patch("hrx_fancontrol.hardware.identity.platform.system", return_value="Darwin"):
                 with self.assertRaises(ValueError):
                     machine_identity(ipmi, root)
 
@@ -227,7 +227,7 @@ class ActuatorTests(unittest.TestCase):
         self.ipmi.sensors.return_value = CommandResult(
             ("sensor",), SAMPLE.replace("3335.000", "0.000"), "", 0, None, .1)
         alerts = []
-        with patch("hrx_fancontrol.collection.time.monotonic", return_value=self.now):
+        with patch("hrx_fancontrol.hardware.collection.time.monotonic", return_value=self.now):
             data = collect(self.ipmi, ThermalEngine(config), config, on_alert=alerts.append)
         self.assertEqual(data["recommended_level"], 3)
         self.assertEqual(alerts, [])
@@ -265,7 +265,7 @@ class ActuatorTests(unittest.TestCase):
                 ipmi.sensors.return_value = CommandResult(("sensor",), SAMPLE, "", 0, None, .1)
                 ipmi.control_status.side_effect = lambda: CommandResult(
                     ("status",), " ".join(byte[2:] for byte in raw(executor.target or 1)), "", 0, None, .1)
-                with patch("hrx_fancontrol.collection.time.monotonic", side_effect=lambda: self.now):
+                with patch("hrx_fancontrol.hardware.collection.time.monotonic", side_effect=lambda: self.now):
                     initial = collect(ipmi, engine, config)
                     self.assertTrue(initial["collection"]["sensor_data_valid"])
                     executor.request(1)
@@ -318,7 +318,7 @@ class ActuatorTests(unittest.TestCase):
                     ipmi.control_status.return_value = CommandResult(
                         ("status",), " ".join(byte[2:] for byte in status), "", 0, None, .1)
                 executor = Executor(ipmi, profile(), Mock(), lambda *_: None, self.stop, lambda: self.now)
-                with patch("hrx_fancontrol.collection.time.monotonic", side_effect=lambda: self.now):
+                with patch("hrx_fancontrol.hardware.collection.time.monotonic", side_effect=lambda: self.now):
                     for count in range(1, 6):
                         data = collect(ipmi, engine, config)
                         executor.update(data)
@@ -361,7 +361,7 @@ class ActuatorTests(unittest.TestCase):
         ipmi.sensors.return_value = CommandResult(("sensor",), "", "", None, "IPMI timeout", 20)
         ipmi.control_status.return_value = CommandResult(("status",), "", "", None, "IPMI timeout", 3)
         executor = Executor(ipmi, profile(), Mock(), lambda *_: None, self.stop, lambda: self.now)
-        with patch("hrx_fancontrol.collection.time.monotonic", side_effect=lambda: self.now):
+        with patch("hrx_fancontrol.hardware.collection.time.monotonic", side_effect=lambda: self.now):
             for count in range(5):
                 executor.update(collect(ipmi, engine, config))
                 self.now += 15
@@ -477,7 +477,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         self.ipmi.set_level.return_value = success()
         self.executor = Executor(self.ipmi, profile(), Mock(), lambda *_: None,
                                  threading.Event(), lambda: self.now)
-        self.clock = patch("hrx_fancontrol.collection.time.monotonic", side_effect=lambda: self.now)
+        self.clock = patch("hrx_fancontrol.hardware.collection.time.monotonic", side_effect=lambda: self.now)
         self.clock.start()
         self.addCleanup(self.clock.stop)
 
@@ -618,10 +618,10 @@ class LifecycleTests(unittest.TestCase):
                     if aborted:
                         raise CalibrationAborted("Higher thermal demand")
                     emit("calibration_complete", {"status": "published", "path": str(path)})
-                with patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
-                     patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
-                     patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
-                     patch("hrx_fancontrol.control_runtime.run_calibration", side_effect=calibration), \
+                with patch("hrx_fancontrol.control.control_runtime.machine_identity", return_value=IDENTITY), \
+                     patch("hrx_fancontrol.control.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
+                     patch("hrx_fancontrol.control.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
+                     patch("hrx_fancontrol.control.control_runtime.run_calibration", side_effect=calibration), \
                      patch("sys.stdout", new_callable=io.StringIO) as output:
                     self.assertEqual(run_control(args, config), int(aborted))
                 messages = {item["event"]: item["message"] for item in map(json.loads, output.getvalue().splitlines())}
@@ -658,14 +658,14 @@ class LifecycleTests(unittest.TestCase):
         invalid = [["--resume-control"], ["--resume-control", "--service-recover", "--profile", "p.json"], ["--auto", "--profile", "p.json", "--once"],
                    ["--calibrate", "p.json", "--once", "--input", "sample"],
                    ["--manual-level", "2", "--calibrate", "p.json"], ["--profile", "p.json"]]
-        with patch("hrx_fancontrol.protocol.ControlIPMI.set_level") as write, patch("sys.stderr", new_callable=io.StringIO):
+        with patch("hrx_fancontrol.hardware.protocol.ControlIPMI.set_level") as write, patch("sys.stderr", new_callable=io.StringIO):
             for argv in invalid:
                 with self.assertRaises(SystemExit):
                     main(argv)
             write.assert_not_called()
 
     def test_cli_service_and_recovery_accept_no_profile(self):
-        with patch("hrx_fancontrol.control_runtime.run_control", return_value=0) as run:
+        with patch("hrx_fancontrol.control.control_runtime.run_control", return_value=0) as run:
             for argv in (["--serve"], ["--auto"], ["--service-recover"],
                          ["--serve", "--profile", "/missing/old.json"]):
                 self.assertEqual(main(argv), 0)
@@ -682,11 +682,11 @@ class LifecycleTests(unittest.TestCase):
             config["logging"]["enabled"] = False
             ipmi = Mock()
             ipmi.set_level.side_effect = CollectionCancelled()
-            with patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
-                 patch("hrx_fancontrol.control_runtime.ControlIPMI", return_value=ipmi), \
-                 patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
-                 patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
-                 patch("hrx_fancontrol.control_runtime.collect", return_value=report(1, recommended=2)), \
+            with patch("hrx_fancontrol.control.control_runtime.machine_identity", return_value=IDENTITY), \
+                 patch("hrx_fancontrol.control.control_runtime.ControlIPMI", return_value=ipmi), \
+                 patch("hrx_fancontrol.control.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
+                 patch("hrx_fancontrol.control.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
+                 patch("hrx_fancontrol.control.control_runtime.collect", return_value=report(1, recommended=2)), \
                  patch("sys.stdout", new_callable=io.StringIO):
                 self.assertEqual(run_control(args, config), 0)
             ipmi.set_level.assert_called_once_with(2)
@@ -703,11 +703,11 @@ class LifecycleTests(unittest.TestCase):
             config["logging"]["enabled"] = False
             ipmi = Mock()
             ipmi.set_level.side_effect = CollectionCancelled()
-            with patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
-                 patch("hrx_fancontrol.control_runtime.ControlIPMI", return_value=ipmi), \
-                 patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
-                 patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
-                 patch("hrx_fancontrol.control_runtime.collect", return_value=report(1, recommended=2)), \
+            with patch("hrx_fancontrol.control.control_runtime.machine_identity", return_value=IDENTITY), \
+                 patch("hrx_fancontrol.control.control_runtime.ControlIPMI", return_value=ipmi), \
+                 patch("hrx_fancontrol.control.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
+                 patch("hrx_fancontrol.control.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
+                 patch("hrx_fancontrol.control.control_runtime.collect", return_value=report(1, recommended=2)), \
                  patch.object(Ownership, "finish", side_effect=OSError("disk unavailable")), \
                  patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(run_control(args, config), 78)
@@ -731,11 +731,11 @@ class LifecycleTests(unittest.TestCase):
             def crash(executor, *_):
                 executor.request(5)
                 raise RuntimeError("unexpected runtime failure")
-            with patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
-                 patch("hrx_fancontrol.control_runtime.ControlIPMI", return_value=ipmi), \
-                 patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
-                 patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
-                 patch("hrx_fancontrol.control_runtime.collect", return_value=report(1, recommended=2)), \
+            with patch("hrx_fancontrol.control.control_runtime.machine_identity", return_value=IDENTITY), \
+                 patch("hrx_fancontrol.control.control_runtime.ControlIPMI", return_value=ipmi), \
+                 patch("hrx_fancontrol.control.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
+                 patch("hrx_fancontrol.control.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
+                 patch("hrx_fancontrol.control.control_runtime.collect", return_value=report(1, recommended=2)), \
                  patch.object(Executor, "update", crash), \
                  patch("sys.stdout", new_callable=io.StringIO) as output, patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(run_control(args, config), 1)
@@ -940,7 +940,7 @@ class ExternalOverrideTests(unittest.TestCase):
                 controller.next_poll = 0
                 controller.tick(server)
             raise AssertionError("Service test did not reach cancellation or suspension")
-        from hrx_fancontrol import control_runtime
+        from hrx_fancontrol.control import control_runtime
         factory = control_runtime.Executor
         test_clock = [100.0]
         collector = Mock(side_effect=collect_impl or CollectionCancelled())
@@ -952,17 +952,17 @@ class ExternalOverrideTests(unittest.TestCase):
             test_clock[0] += seconds
         if factory is Executor:
             factory = lambda *args: Executor(*args, clock=lambda: test_clock[0])
-        with patch("hrx_fancontrol.control_runtime.Executor", side_effect=factory), \
-             patch("hrx_fancontrol.service.ServiceController.run", bounded_service), \
-             patch("hrx_fancontrol.control_runtime.machine_identity", return_value=IDENTITY), \
-             patch("hrx_fancontrol.control_runtime.ControlIPMI", return_value=ipmi), \
-             patch("hrx_fancontrol.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
-             patch("hrx_fancontrol.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
-             patch("hrx_fancontrol.control_runtime.collect", side_effect=timed_collect), \
-             patch("hrx_fancontrol.control_runtime.AsyncLogger", return_value=logger), \
-             patch("hrx_fancontrol.control_runtime.format_log_record", side_effect=lambda data, *args: data), \
-             patch("hrx_fancontrol.control_runtime.transition_key", return_value=()), \
-             patch("hrx_fancontrol.control_runtime.fallback", side_effect=lambda ex, collect_next, wait, emit: fallback(ex, collect_next, fast_wait, emit, clock=lambda: test_clock[0])), \
+        with patch("hrx_fancontrol.control.control_runtime.Executor", side_effect=factory), \
+             patch("hrx_fancontrol.control.service.ServiceController.run", bounded_service), \
+             patch("hrx_fancontrol.control.control_runtime.machine_identity", return_value=IDENTITY), \
+             patch("hrx_fancontrol.control.control_runtime.ControlIPMI", return_value=ipmi), \
+             patch("hrx_fancontrol.control.control_runtime.WriterLock", side_effect=lambda: WriterLock(Path(tmp) / "run")), \
+             patch("hrx_fancontrol.control.control_runtime.control_state_directory", side_effect=lambda: (Path(tmp) / "run")), \
+             patch("hrx_fancontrol.control.control_runtime.collect", side_effect=timed_collect), \
+             patch("hrx_fancontrol.control.control_runtime.AsyncLogger", return_value=logger), \
+             patch("hrx_fancontrol.control.control_runtime.format_log_record", side_effect=lambda data, *args: data), \
+             patch("hrx_fancontrol.control.control_runtime.transition_key", return_value=()), \
+             patch("hrx_fancontrol.control.control_runtime.fallback", side_effect=lambda ex, collect_next, wait, emit: fallback(ex, collect_next, fast_wait, emit, clock=lambda: test_clock[0])), \
              patch("sys.stdout", new_callable=io.StringIO) as output, \
              patch("sys.stderr", new_callable=io.StringIO):
             code = run_control(args, config)
@@ -1215,10 +1215,10 @@ class ExternalOverrideTests(unittest.TestCase):
                     now[0] += 15
                     return report(3, now[0], recommended=1)
 
-                target = "hrx_fancontrol.control_runtime.run_calibration" if mode == "calibrate" else \
-                         "hrx_fancontrol.executor.Executor.update"
+                target = "hrx_fancontrol.control.control_runtime.run_calibration" if mode == "calibrate" else \
+                         "hrx_fancontrol.control.executor.Executor.update"
                 with patch(target, side_effect=crash, autospec=True), \
-                     patch("hrx_fancontrol.control_runtime.Executor",
+                     patch("hrx_fancontrol.control.control_runtime.Executor",
                            side_effect=lambda *args: Executor(*args, clock=lambda: now[0])):
                     code, events = self.run_with(tmp, ipmi, mode=mode, collect_impl=collect_impl)
                 self.assertEqual(code, 1)  # Recovery does not erase the original execution failure.
@@ -1247,7 +1247,7 @@ class ExternalOverrideTests(unittest.TestCase):
                 now[0] += 15
                 return report(3, now[0])
 
-            with patch("hrx_fancontrol.control_runtime.Executor",
+            with patch("hrx_fancontrol.control.control_runtime.Executor",
                        side_effect=lambda *args: Executor(*args, clock=lambda: now[0])):
                 code, events = self.run_with(tmp, ipmi, mode="recovery", collect_impl=collect_impl)
             self.assertEqual(code, 0)

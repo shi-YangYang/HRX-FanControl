@@ -7,12 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from hrx_fancontrol.collection import CollectionStats, collect
+from hrx_fancontrol.hardware.collection import CollectionStats, collect
 from hrx_fancontrol.config import load_config
-from hrx_fancontrol.ipmi import CommandResult, DIAGNOSTIC_TAIL_CHARS
-from hrx_fancontrol.log_record import format_log_record
-from hrx_fancontrol.logger import AsyncLogger, DailyWriter
-from hrx_fancontrol.thermal_engine import ThermalEngine
+from hrx_fancontrol.hardware.ipmi import CommandResult, DIAGNOSTIC_TAIL_CHARS
+from hrx_fancontrol.reporting.log_record import format_log_record
+from hrx_fancontrol.reporting.logger import AsyncLogger, DailyWriter
+from hrx_fancontrol.policy.thermal_engine import ThermalEngine
 
 
 SAMPLE = (Path(__file__).resolve().parents[1] / "examples/hr650x-observed-sensors.txt").read_text()
@@ -41,7 +41,7 @@ class ReadableLogTest(unittest.TestCase):
         ipmi = Mock()
         ipmi.sensors.return_value = sensor or CommandResult(("sensor",), text, "", 0, None, 0.123456, 20)
         ipmi.control_status.return_value = status or CommandResult(("raw",), STATUS, "", 0, None, 0.1, 3)
-        with patch("hrx_fancontrol.collection.time.monotonic", return_value=now):
+        with patch("hrx_fancontrol.hardware.collection.time.monotonic", return_value=now):
             return collect(ipmi, self.engine, self.config, stats=self.stats, on_alert=on_alert)
 
     @staticmethod

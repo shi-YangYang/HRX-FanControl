@@ -6,16 +6,16 @@ import threading
 import time
 
 from .calibration_run import CalibrationAborted, run_calibration
-from .collection import CollectionStats, collect, poll_wait_seconds, timestamp
+from ..hardware.collection import CollectionStats, collect, poll_wait_seconds, timestamp
 from .executor import ExecutionFailure, Executor, ExternalOverride, OwnershipUnverified
-from .identity import machine_identity, validate_control_config
-from .ipmi import CollectionCancelled, check_cancelled
+from ..hardware.identity import machine_identity, validate_control_config
+from ..hardware.ipmi import CollectionCancelled, check_cancelled
 from .lifecycle import (OVERRIDE_EXIT_STATUS, ControlSuspended, Ownership,
                         StopSignals, WriterLock, control_state_directory, notify)
-from .logger import AsyncLogger, transition_key
-from .log_record import format_log_record
-from .protocol import ControlIPMI
-from .thermal_engine import ThermalEngine
+from ..reporting.logger import AsyncLogger, transition_key
+from ..reporting.log_record import format_log_record
+from ..hardware.protocol import ControlIPMI
+from ..policy.thermal_engine import ThermalEngine
 
 FALLBACK_LEVEL = 3
 FALLBACK_TIMEOUT = 90.0
@@ -192,7 +192,7 @@ def run_control(args, config):
                                 logger.emit(format_log_record(report, "transition" if key != previous_key else "summary"))
                                 last_log = now
                             previous_key = key
-                            from .main import render
+                            from ..main import render
                             output(json.dumps(report, ensure_ascii=False, allow_nan=False) if args.json else render(report))
 
                         controller = ServiceController(executor, config, state_directory,

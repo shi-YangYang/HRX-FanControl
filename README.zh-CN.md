@@ -68,11 +68,8 @@ sudo hrx-fancontrol status     # 查看模式及最近读数
 ## 文档
 
 - [HR650X 使用指南](docs/hr650x-guide.md)：五档策略、BMC 阈值、故障处理、校准与部署。
-- [配置与日志](docs/hr650x-guide.md#配置与日志) · [默认配置](config/default.yaml)
-- [源码](src/hrx_fancontrol/) · [服务模板](systemd/hrx-fancontrol.service)
-
-[Linux CI](.github/workflows/ci.yml) 使用 Ubuntu 24.04、Python 3.9 / 3.12 检查安装、单元测试和 CLI 离线回放，在面向 `main` 的 PR 时运行。
-
-[Release CD](.github/workflows/release.yml) 在网页发布 Release 后测试并上传 `.deb` 与校验文件。[发布与升级步骤](docs/hr650x-guide.md#发布版本与升级)说明版本号、附件和配置保留。
+- [配置与日志](docs/hr650x-guide.md#配置与日志) · [默认配置](src/hrx_fancontrol/default.yaml)
+- [源码](src/hrx_fancontrol/) · [服务模板](packaging/systemd/hrx-fancontrol.service)
+- [开发说明](docs/development.md)：目录职责、本地检查、打包与发布。
 
 [MIT 许可证](LICENSE) · 版权所有 © 2026 小洋

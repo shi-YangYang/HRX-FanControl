@@ -3,10 +3,10 @@ import time
 
 from .commands import validate_command
 from .executor import ExternalOverride
-from .ipmi import check_cancelled
+from ..hardware.ipmi import check_cancelled
 from .lifecycle import notify
 from .service_state import ServiceState
-from .thermal_engine import ThermalEngine
+from ..policy.thermal_engine import ThermalEngine
 
 
 class ServiceController:
@@ -138,7 +138,7 @@ class ServiceController:
             self.publish(report, "automatic" if automatic else "manual")
         except ExternalOverride as exc:
             self.suspend(exc)
-        from .collection import poll_wait_seconds
+        from ..hardware.collection import poll_wait_seconds
         delay = (5 if self.executor.awaiting_confirmation else
                  poll_wait_seconds(report, self.config["controller"]["poll_interval_seconds"], self.clock() - started))
         self.next_poll = self.clock() + delay
