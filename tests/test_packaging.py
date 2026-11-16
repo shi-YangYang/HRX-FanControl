@@ -1,8 +1,11 @@
 """Host-independent package and release contract checks; no hardware or upload."""
 import hashlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,12 +81,99 @@ runpy.run_module("hrx_fancontrol", run_name="__main__")
             self.assertFalse(report["applied"])
             self.assertEqual(len(report["fans"]), 6)
 
-    def test_rejects_invalid_or_mismatched_tag_before_git(self):
+    def test_rejects_invalid_tag_before_git_or_package_output(self):
         with patch.object(release, "run") as git:
-            for tag in ("$(touch bad)", "--help", "v01.0.0", "v0.1.0-rc1", "v9.9.9"):
+            for tag in ("$(touch bad)", "--help", "v01.0.0", "v0.1.0-rc1", "v.0.1.2",
+                        "v0.1.2\n", "0.1.2", "v0.01.2", "v0.1.02", "v0.1.2/other"):
                 with self.subTest(tag=tag), self.assertRaises(ValueError):
                     release.validate_tag(tag, "abc")
             git.assert_not_called()
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "package"
+            with self.assertRaises(ValueError):
+                build_deb.stage(destination, "0.1.2\nInjected: yes")
+            self.assertFalse(destination.exists())
+            output = Path(tmp) / "dist"
+            with patch.object(sys, "argv", ["build_deb.py", "--tag", "v.0.1.2", "--output", str(output)]), \
+                    patch.object(build_deb.subprocess, "run") as builder, patch.object(sys, "stderr", io.StringIO()):
+                with self.assertRaises(SystemExit) as result:
+                    build_deb.main()
+                self.assertEqual(result.exception.code, 2)
+                builder.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_stage_uses_release_version_preserving_source_and_other_initialization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "source"
+            root.mkdir()
+            for name in ("src", "packaging", "docs", "examples"):
+                shutil.copytree(build_deb.ROOT / name, root / name,
+                                ignore=shutil.ignore_patterns("__pycache__", "*.egg-info"))
+            for name in ("LICENSE", "pyproject.toml"):
+                shutil.copyfile(build_deb.ROOT / name, root / name)
+            source_init = root / "src/hrx_fancontrol/__init__.py"
+            original = 'MARKER = "保留"; __version__ = "0.1.1"; AFTER = 42\r\n'.encode()
+            source_init.write_bytes(original)
+            project_before = (root / "pyproject.toml").read_bytes()
+            destination = Path(tmp) / "package"
+            build_deb.stage(destination, build_deb.version_from_tag("v0.1.2"), root)
+            library = destination / "usr/lib/hrx-fancontrol"
+            self.assertIn("Version: 0.1.2\n", (destination / "DEBIAN/control").read_text())
+            self.assertEqual((library / "hrx_fancontrol/__init__.py").read_bytes(),
+                             original.replace(b'"0.1.1"', b"'0.1.2'"))
+            installed = subprocess.check_output(
+                [sys.executable, "-I", "-B", "-c",
+                 'import sys,json; sys.path.insert(0,sys.argv[1]); import hrx_fancontrol as p; '
+                 'print(json.dumps([p.__version__,p.MARKER,p.AFTER]))', str(library)],
+                text=True, cwd=tmp)
+            self.assertEqual(json.loads(installed), ["0.1.2", "保留", 42])
+            self.assertEqual(source_init.read_bytes(), original)
+            self.assertEqual((root / "pyproject.toml").read_bytes(), project_before)
+
+    def test_build_cli_names_metadata_and_checksums_use_selected_version(self):
+        originals = {path: path.read_bytes() for path in
+                     (build_deb.ROOT / "pyproject.toml", build_deb.ROOT / "src/hrx_fancontrol/__init__.py")}
+        source_version = build_deb.version()
+        for options, expected in ((["--tag", "v0.1.2"], "0.1.2"), ([], source_version)):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "dist"
+                def build(args, **kwargs):
+                    self.assertEqual(args[:4], ["dpkg-deb", "--root-owner-group", "-Zxz", "--build"])
+                    package = Path(args[-2])
+                    self.assertIn(f"Version: {expected}\n", (package / "DEBIAN/control").read_text())
+                    spec = importlib.util.spec_from_file_location("staged_package", package / "usr/lib/hrx-fancontrol/hrx_fancontrol/__init__.py")
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    self.assertEqual(module.__version__, expected)
+                    Path(args[-1]).write_bytes(b"mock deb archive")
+                with patch.object(sys, "argv", ["build_deb.py", *options, "--output", str(output)]), \
+                        patch.dict(os.environ, SOURCE_DATE_EPOCH="1700000000"), \
+                        patch.object(build_deb.subprocess, "run", side_effect=build) as builder, \
+                        patch.object(sys, "stdout", io.StringIO()):
+                    build_deb.main()
+                builder.assert_called_once()
+                package = output / f"hrx-fancontrol_{expected}_all.deb"
+                self.assertEqual(sorted(path.name for path in output.iterdir()), ["SHA256SUMS", package.name])
+                self.assertEqual((output / "SHA256SUMS").read_text(),
+                                 f"{hashlib.sha256(package.read_bytes()).hexdigest()}  {package.name}\n")
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_release_entrypoints_allow_tag_version_without_reading_source_version(self):
+        environment = dict(GITHUB_REPOSITORY="o/r", RELEASE_ID="123", RELEASE_TAG="v0.1.2", GITHUB_SHA="event")
+        for action in ("validate", "upload"):
+            with self.subTest(action=action), patch.dict(os.environ, environment), \
+                    patch.object(sys, "argv", ["release.py", action]), \
+                    patch.object(build_deb, "version", side_effect=AssertionError("Source version is not the release version")), \
+                    patch.object(release, "run", side_effect=["event", "main", "event"]), \
+                    patch.object(release.subprocess, "run") as command, \
+                    patch.object(release, "release_info"), patch.object(release, "upload") as upload:
+                release.main()
+                self.assertEqual(command.call_args.args[0], ["git", "merge-base", "--is-ancestor", "event", "main"])
+                if action == "upload":
+                    self.assertEqual(upload.call_args.args[:3], ("o/r", "123", "v0.1.2"))
+                else:
+                    upload.assert_not_called()
 
     def test_pins_event_sha_and_rejects_moved_tag(self):
         with patch.object(release, "run", side_effect=["event", "main", "moved"]), patch.object(release.subprocess, "run") as command:

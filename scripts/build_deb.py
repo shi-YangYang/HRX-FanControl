@@ -13,6 +13,13 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def version_from_tag(tag):
+    if not isinstance(tag, str) or not re.fullmatch(
+            r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
+        raise ValueError("Expected stable Release tag vX.Y.Z, for example v0.1.2 (no dot after v)")
+    return tag[1:]
+
+
 def version(root=ROOT):
     project = (root / "pyproject.toml").read_text()
     match = re.search(r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"$', project, re.M)
@@ -27,7 +34,31 @@ def version(root=ROOT):
     return expected
 
 
+def stamp_version(path, release_version):
+    """Replace only the staged package's literal version, preserving its other code."""
+    original = path.read_bytes()
+    tree = ast.parse(original.decode("utf-8"))
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                   and any(isinstance(target, ast.Name) and target.id == "__version__"
+                           for target in node.targets)]
+    if (len(assignments) != 1 or assignments[0] not in tree.body or
+            len(assignments[0].targets) != 1 or
+            not isinstance(assignments[0].value, ast.Constant) or
+            not isinstance(assignments[0].value.value, str)):
+        raise ValueError("Package must define one top-level literal __version__")
+    value = assignments[0].value
+    if value.value == release_version:
+        return
+    # AST columns are UTF-8 byte offsets, not character offsets.
+    lines = original.splitlines(keepends=True)
+    start = sum(map(len, lines[:value.lineno - 1])) + value.col_offset
+    end = sum(map(len, lines[:value.end_lineno - 1])) + value.end_col_offset
+    path.write_bytes(original[:start] + repr(release_version).encode("ascii") + original[end:])
+
+
 def stage(destination, release_version, root=ROOT):
+    version_from_tag("v" + release_version)
+
     def put(name, content, mode=0o644):
         path = destination / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +78,7 @@ def stage(destination, release_version, root=ROOT):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
             target.chmod(0o644)
+    stamp_version(package / "__init__.py", release_version)
     put("usr/bin/hrx-fancontrol", '''#!/usr/bin/python3
 import sys
 sys.path.insert(0, "/usr/lib/hrx-fancontrol")
@@ -86,12 +118,13 @@ Description: Temperature monitoring and fan control for Lenovo HR650X
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", help="Release tag vX.Y.Z; must match source version")
+    parser.add_argument("--tag", help="Release tag vX.Y.Z; sets the package version instead of the source version")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     args = parser.parse_args()
-    release_version = version()
-    if args.tag and args.tag != "v" + release_version:
-        parser.error("Release tag must be v" + release_version)
+    try:
+        release_version = version_from_tag(args.tag) if args.tag is not None else version()
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve() / f"hrx-fancontrol_{release_version}_all.deb"
     epoch = os.environ.get("SOURCE_DATE_EPOCH") or subprocess.check_output(
