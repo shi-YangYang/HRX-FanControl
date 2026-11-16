@@ -104,6 +104,33 @@ UNC / UCR / UNR 分别为上限非临界、临界、不可恢复告警；NA 表�
 风扇的 BMC 下限预警为 690 RPM、下限临界为 575 RPM。软件另用 `fan.minimum_rpm: 1` 检测停转，并检查 BMC 告警状态。
 Inlet 下限预警为 7°C，NIC 下限三列均为 0°C；这些数值下限保留在原始快照中，未用作独立软件门槛。
 
+## 邮箱告警
+
+```sh
+sudo hrx-fancontrol email setup
+```
+
+按顺序输入 SMTP 主机地址、账号和授权码（隐藏输入），再确认收件邮箱、加密方式与端口。收件人默认是自己；账号不是邮箱地址时，会另外询问发件邮箱。默认 SSL/465，也支持 STARTTLS/587 和自定义端口；SMTP 服务须提供有效 TLS 证书。取消输入会保留原配置。
+
+配置保存在 `/etc/hrx-fancontrol/email.json`，仅 root 可读写，升级时保留。保存后开启邮件通知，服务会在约 5 秒内采用，无须重启；不会自动发测试邮件。
+
+```sh
+sudo hrx-fancontrol email test    # 主动发一封测试邮件，关闭通知时也可以测试
+sudo hrx-fancontrol email status  # 查看连接参数与开关，不显示授权码
+sudo hrx-fancontrol email off     # 只关闭邮件通知
+sudo hrx-fancontrol email on      # 使用已保存的配置重新开启
+```
+
+自动采样建议进入 L5 时发送中文邮件，包含主机、采样时间、温度和风扇 RPM；沿用已有曲线及无曲线 BMC 告警规则，不额外设置温度线。持续 L5 只发一次，有效采样降档后再次进入 L5 才发新邮件；无效采样不会当作降温。服务重启后重新计轮，首轮仍为 L5 时可能再发一封。
+
+邮件在后台发送，每次最多等待 30 秒；失败最多尝试三次，间隔至少 60 秒。降档、关闭自动或外部让位会取消待发送重试；关闭邮件通知在下一次配置读取时生效。已交给 SMTP 的邮件不能撤回，网络中断时也无法保证邮件绝不重复。发送失败只记录在服务日志，不影响风扇调控：
+
+```sh
+sudo journalctl -u hrx-fancontrol --since '10 minutes ago' --no-pager
+```
+
+`email test` 成功表示 SMTP 已接受邮件，请实际检查收件箱（包括垃圾邮件）。自动关闭、固定手动、校准、单次只读和离线回放不会持续监测并发送邮件；邮箱命令本身不改变自动开关或风扇参数。
+
 ## 配置与日志
 
 [默认配置](../src/hrx_fancontrol/default.yaml) 随程序包提供。自定义文件只需写要覆盖的字段，例如保存为 `profile.yaml`：
