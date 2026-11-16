@@ -91,10 +91,15 @@ def main(argv=None):
     manual_command = actions.add_parser("manual", help="set decimal parameter 1..100 and disable automatic control")
     manual_command.add_argument("parameter")
     actions.add_parser("status", help="show service mode and last observed readings")
+    email_command = actions.add_parser("email", help="configure and test email notifications")
+    email_command.add_argument("email_action", choices=("setup", "test", "status", "on", "off"))
     args = parser.parse_args(argv)
     if args.action:
         if args.calibrate or args.auto or args.serve or args.service_recover or args.profile or args.once or args.input or args.resume_control or args.config or args.no_log:
             parser.error("Service commands cannot be combined with monitoring/control startup options")
+        if args.action == "email":
+            from .reporting.email_command import run
+            return run(args.email_action, args.json)
         from .control.commands import command_client, decimal_parameter
         try:
             command = {"action": args.setting if args.action == "auto" else args.action}

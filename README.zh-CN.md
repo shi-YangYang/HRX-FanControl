@@ -65,6 +65,17 @@ sudo hrx-fancontrol status     # 查看模式及最近读数
 
 写入后立即读取 BMC，手动模式和六个风扇的参数都匹配即显示“设置已确认”；不等待 RPM 稳定。回读失败时有界重查，手动设置确认后停止采样。可选的 [RPM 校准测量](docs/hr650x-guide.md#校准与实际控制)不影响服务使用。
 
+## 邮箱告警
+
+```sh
+sudo hrx-fancontrol email setup   # 按提示配置 SMTP、授权码和收件人
+sudo hrx-fancontrol email test    # 发送测试邮件
+sudo hrx-fancontrol email status  # 查看邮箱配置，不显示授权码
+sudo hrx-fancontrol email off     # 关闭邮件通知；email on 重新开启
+```
+
+服务自动采样的建议档位进入 L5 时发邮件，持续 L5 不重复发送。配置无需重启服务；授权码隐藏输入。详见[邮箱告警](docs/hr650x-guide.md#邮箱告警)。
+
 ## 文档
 
 - [HR650X 使用指南](docs/hr650x-guide.md)：五档策略、BMC 阈值、故障处理、校准与部署。

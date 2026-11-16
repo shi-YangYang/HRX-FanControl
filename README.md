@@ -65,6 +65,17 @@ sudo hrx-fancontrol status     # Show the mode and last observed readings
 
 Each write is followed immediately by a BMC read. Manual mode and six matching fan parameters confirm the setting, without waiting for RPM to settle. Unavailable readback is retried within a deadline; manual control stops sampling once confirmed. Optional [RPM calibration](docs/hr650x-guide.md#校准与实际控制) is separate from service operation.
 
+## Email alerts
+
+```sh
+sudo hrx-fancontrol email setup   # Configure SMTP, authorization code and recipient
+sudo hrx-fancontrol email test    # Send a test email
+sudo hrx-fancontrol email status  # Show settings without the authorization code
+sudo hrx-fancontrol email off     # Disable email; use email on to enable it again
+```
+
+The service sends an email when automatic sampling recommends L5, once per continuous L5 episode. Configuration takes effect without restarting the service; authorization code input is hidden. See [email alerts](docs/hr650x-guide.md#邮箱告警).
+
 ## Documentation
 
 - [HR650X guide](docs/hr650x-guide.md): fan levels, BMC thresholds, fault handling, calibration, and deployment.

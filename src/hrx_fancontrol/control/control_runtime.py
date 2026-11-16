@@ -37,6 +37,7 @@ def fallback(executor, collect_next, wait, emit, clock=time.monotonic):
 
 def run_control(args, config):
     logger = None
+    email = None
     owner = executor = controller = ipmi = None
     stats = CollectionStats()
     last_report = None
@@ -68,6 +69,8 @@ def run_control(args, config):
     def emit(event, control):
         if controller:
             controller.publish_status()
+            if email and controller.state.data["mode"] != "automatic":
+                email.pause()
         if event == "write_started":
             notify_l5(control.get("target_level"))
         record = {"schema_version": 2, "time": timestamp(), "event": event, "run_id": stats.run_id,
@@ -166,6 +169,8 @@ def run_control(args, config):
 
                 def alert(report):
                     nonlocal l5_notified
+                    if email and controller and controller.state.data["mode"] == "automatic" and not executor.yielded:
+                        email.observe(report)
                     if not l5_notified:
                         report.update(mode=mode, applied=False, control=executor.snapshot())
                         logger.emit(format_log_record(report, "safety_alert"))
@@ -194,6 +199,8 @@ def run_control(args, config):
                                                        "expected_rpm": None})
                             if current_mode == "automatic":
                                 notify_l5(max(report["recommended_level"] or 0, executor.target or 0) or None)
+                                if email:
+                                    email.observe(report)
                             report["logging_health"] = {"error": logger.error, "dropped_records": logger.dropped}
                             key = (transition_key(report), current_mode, executor.status, executor.parameter)
                             now = time.monotonic()
@@ -207,6 +214,11 @@ def run_control(args, config):
 
                         controller = ServiceController(executor, config, state_directory,
                                                        lambda engine, early: collect_next(early, engine), publish)
+                        from ..reporting.email_alerts import EmailAlerts, notice
+                        try:
+                            email = EmailAlerts()
+                        except (OSError, RuntimeError):
+                            notice("后台通知无法启动；风扇调控继续运行。")
                         emit("service_started", executor.snapshot())
                         with CommandServer(lock.directory, controller.cached_status, stop.wake) as server:
                             controller.run(server)
@@ -258,6 +270,8 @@ def run_control(args, config):
             print(f"hrx-fancontrol: {exc}", file=sys.stderr)
             code = 1
         finally:
+            if email:
+                email.close()
             try:
                 if ipmi:
                     ipmi.close()
