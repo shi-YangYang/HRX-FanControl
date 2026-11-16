@@ -54,18 +54,20 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests \
 python3 scripts/build_deb.py
 ```
 
-输出为 `dist/hrx-fancontrol_X.Y.Z_all.deb` 和 `dist/SHA256SUMS`，版本取自源码。可用 `--output` 指定输出目录，`--tag vX.Y.Z` 校验版本一致性。构建只生成文件，不安装或启用服务。
+输出为 `dist/hrx-fancontrol_X.Y.Z_all.deb` 和 `dist/SHA256SUMS`。默认版本取自源码；加 `--tag v0.1.2` 则生成 `0.1.2` 的安装包，包内程序版本也同步更新。可用 `--output` 指定输出目录。构建只修改临时打包目录，不改仓库源码，不安装或启用服务。
 
 源码传输打包命令见[源码安装](hr650x-guide.md#国内服务器安装)。
 
 ## 发布版本
 
-先在 `dev` 将 `pyproject.toml` 的 `version` 和 `src/hrx_fancontrol/__init__.py` 的 `__version__` 改为同一个 `X.Y.Z`，创建 PR，等待 Linux CI 成功后再合入 `main`。
+在 `dev` 完成修改，创建 PR，等待 Linux CI 成功后合入 `main`。无需提前修改源码版本号，正式安装包的版本由 Release 标签决定。
 
 1. 在 GitHub 仓库打开 **Releases → Draft a new release**。
-2. 新建标签，例如 `v0.1.0`，Target 选 `main`，填写发布说明，然后 **Publish release**。
+2. 新建标签，例如 `v0.1.2`，Target 选 `main`，填写发布说明，然后 **Publish release**。
 3. 在 Actions 等待 **Release Debian package** 成功。它测试标签对应代码、构建并检查 Linux 安装/升级，再把 `.deb` 与 `SHA256SUMS` 加到这条 Release。只保存草稿不会触发。
 
-标签必须是 `vX.Y.Z`，与源码两处版本一致，提交须已进入 `main`。仓库需关闭 **immutable releases**，因为附件在发布后才生成。构建失败时查看 Actions 日志；需要改代码时发布新版本。相同源码的失败任务可以重跑；内容相同的已有附件会跳过，内容不同则拒绝覆盖。
+标签必须是 `vX.Y.Z`（例如 `v0.1.2`，不是 `v.0.1.2`），提交须已进入 `main`。CD 自动统一安装包文件名、Debian 版本和包内程序版本；GitHub 自动提供的源码压缩包保留原始提交内容，源码直接安装仍使用其中的开发版本。
+
+仓库需关闭 **immutable releases**，因为附件在发布后才生成。构建失败时查看 Actions 日志；需要改代码时发布新版本。相同源码的失败任务可以重跑，旧标签的重跑仍使用旧提交中的脚本；内容相同的已有附件会跳过，内容不同则拒绝覆盖。
 
 [Linux CI](../.github/workflows/ci.yml) 在 Ubuntu 24.04 使用 Python 3.9 / 3.12 检查安装、单元测试和离线回放。安装生命周期检查运行于临时 runner，以测试进程替代硬件服务，覆盖首装、运行/停止及启用/禁用四种升级状态、卸载与配置保留。[Release 工作流](../.github/workflows/release.yml) 复用构建和安装检查；这些检查不访问 IPMI，不代表实机控制验证。

@@ -27,6 +27,8 @@ sudo apt-get install -y "$package"
 [[ $(systemctl is-enabled "$unit" || true) == disabled ]]
 # Native CLI must work without a virtualenv, network pip, or BMC.
 /usr/bin/hrx-fancontrol --once --input examples/hr650x-observed-sensors.txt --json --no-log >/tmp/hrx-package-replay.json
+installed_version=$(/usr/bin/python3 -I -B -c 'import sys; sys.path.insert(0, "/usr/lib/hrx-fancontrol"); import hrx_fancontrol; print(hrx_fancontrol.__version__)')
+[[ "$installed_version" == "$(dpkg-query -W -f='${Version}' hrx-fancontrol)" ]]
 python3 - <<'PY'
 import json
 with open('/tmp/hrx-package-replay.json') as f:

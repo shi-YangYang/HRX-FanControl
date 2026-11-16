@@ -5,10 +5,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
-from build_deb import version
+from build_deb import version_from_tag
 
 
 def run(*args):
@@ -27,10 +26,7 @@ def release_info(repo, release_id, tag):
 
 
 def validate_tag(tag, sha):
-    if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
-        raise ValueError("Expected stable Release tag vX.Y.Z")
-    if tag != "v" + version():
-        raise ValueError("Release tag does not match the source version")
+    version_from_tag(tag)
     if run("git", "rev-parse", "HEAD") != sha:
         raise ValueError("Checkout does not match the release event SHA")
     subprocess.run(["git", "fetch", "--no-tags", "origin",

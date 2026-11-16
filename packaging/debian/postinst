@@ -3,6 +3,12 @@ set -eu
 state=/run/hrx-fancontrol-package
 case "$1" in
     configure)
+        # Reproducible builds can replace same-size source with the same mtime.
+        # Discard this private package's bytecode before restarting its service.
+        library=/usr/lib/hrx-fancontrol
+        if [ -d "$library" ] && [ ! -L "$library" ]; then
+            find -P "$library" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+        fi
         # Record potential unit links without creating them, for later purging.
         deb-systemd-helper update-state hrx-fancontrol.service
         if [ -d /run/systemd/system ]; then
