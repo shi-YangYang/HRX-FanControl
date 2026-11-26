@@ -469,6 +469,7 @@ class LoggingAndCLITest(unittest.TestCase):
 
     def test_l5_notice_once_per_entry_in_real_sampling_loop(self):
         stop, clock, records, polls = threading.Event(), [0.0], [], [0]
+        sample_times = []
         hot = SAMPLE.replace("60.000", "80.000")
         changed_alarm = hot.replace("80.000     | degrees C  | ok", "80.000     | degrees C  | unc")
         cpu_hot = SAMPLE.replace("44.000", "80.000")
@@ -477,6 +478,7 @@ class LoggingAndCLITest(unittest.TestCase):
         def execute(command, timeout):
             if command[-1] == "sensor":
                 text = samples[polls[0]]
+                sample_times.append(clock[0])
                 polls[0] += 1
                 return CommandResult(command, text, "", 0, None, 0.1, timeout)
             return CommandResult(command, "20 0f 0f 0f 0f 0f 0f 0f 0f", "", 0, None, 0.1, timeout)
@@ -498,7 +500,9 @@ class LoggingAndCLITest(unittest.TestCase):
             result = main(["--json"])
         reports = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(result, 0)  # Requested stop.
-        self.assertEqual([report["recommended_level"] for report in reports], [5] * 6 + [4, 5])
+        self.assertEqual(sample_times, [0, 30, 60, 90, 120, 150, 180, 210])
+        # Low temperature starts at 60 s; the 60 s hold ends at 120 s (poll 5).
+        self.assertEqual([report["recommended_level"] for report in reports], [5] * 4 + [4] * 3 + [5])
         self.assertEqual(errors.getvalue().splitlines(), [L5_ALERT, L5_ALERT])
         self.assertNotIn(L5_ALERT, "\n".join(render(report) for report in reports))
         alerts = [record for record in records if record["event"] == "safety_alert"]
