@@ -31,6 +31,8 @@ For an existing source installation, follow the [migration steps](docs/hr650x-gu
 
 ## Start and control
 
+The current source defaults to 30-second automatic sampling; existing installations need both the updated program and [configuration](docs/hr650x-guide.md#配置与日志).
+
 Optionally read temperatures, RPM and recommendations before starting the service. This command does not change fan settings:
 
 ```sh

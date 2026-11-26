@@ -72,6 +72,27 @@ def success():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_control_accepts_new_defaults_and_enforces_timing_bounds(self):
+        config = load_config()
+        validate_control_config(config)
+        for interval in (5, 30):
+            config["controller"]["poll_interval_seconds"] = interval
+            validate_control_config(config)
+        for section, key, value in (("controller", "poll_interval_seconds", 4.9),
+                                    ("controller", "poll_interval_seconds", 30.1),
+                                    ("safety", "sensor_timeout_seconds", 60.1),
+                                    ("ipmi", "command_timeout_seconds", 20.1),
+                                    ("ipmi", "status_timeout_seconds", 3.1)):
+            with self.subTest(key=key, value=value):
+                invalid = copy.deepcopy(config)
+                invalid[section][key] = value
+                with self.assertRaises(ValueError):
+                    validate_control_config(invalid)
+        # Previously installed explicit profiles remain valid after updating the program.
+        config["controller"]["poll_interval_seconds"] = 15
+        config["safety"]["sensor_timeout_seconds"] = 30
+        validate_control_config(config)
+
     def test_realistic_adjacent_rpm_bands_and_reserved_header_bits(self):
         data = validate_profile(profile(), IDENTITY, load_config())
         self.assertTrue(matches_level(raw(1, "0x0c"), 1))
@@ -283,8 +304,9 @@ class ActuatorTests(unittest.TestCase):
                         executor.update(stale)
                         self.assertEqual(executor.mismatches, 0)
                         self.assertTrue(executor.snapshot()["verified"])
-                        if index < poll_count - 1:
-                            self.assertEqual(executor.target, 1)
+                        # Longer stale polls can reach the unchanged 300-second limit first.
+                        expected = 3 if index + 1 >= 5 or self.now - 100 >= 300 else 1
+                        self.assertEqual(executor.target, expected)
                     self.assertEqual(stale["read_failure"]["consecutive_failures"], poll_count)
                     self.assertIn(trigger, stale["read_failure"]["trigger_reasons"])
                     self.assertEqual([call.args[0] for call in ipmi.set_level.call_args_list], [1, 3])
@@ -501,9 +523,11 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         return collect(self.ipmi, self.engine, self.config, on_alert=self.executor.early_l5, stats=self.stats)
 
     def test_late_status_expires_once_keeps_raw_and_obeys_five_or_300_without_lowering(self):
+        expired_delay = self.config["safety"]["sensor_timeout_seconds"] + 1
+        interval = self.config["controller"]["poll_interval_seconds"]
         for initial_level, temperature in ((1, 60), (4, 75), (5, 80)):
-            for polls, first_gap, reason in ((5, 15, "failure-count"),
-                                              (1, 269, "no-valid-sample-timeout")):
+            for polls, first_gap, reason in ((5, interval, "failure-count"),
+                                              (1, 300 - expired_delay, "no-valid-sample-timeout")):
                 with self.subTest(initial_level=initial_level, reason=reason):
                     self.engine = ThermalEngine(self.config)
                     self.stats = CollectionStats()
@@ -514,7 +538,8 @@ class FinalSampleFreshnessTests(unittest.TestCase):
                     if self.executor.target is None:
                         self.executor.request(initial_level)
                     for index in range(polls):
-                        data = self.poll(self.now + (first_gap if index == 0 else 15), delay=31)
+                        prior_target = self.executor.target
+                        data = self.poll(self.now + (first_gap if index == 0 else interval), delay=expired_delay)
                         self.assertFalse(data["collection"]["sensor_data_valid"])
                         self.assertTrue(data["collection"]["sensor_data_available"])
                         self.assertEqual(data["collection"]["status"], "failed")
@@ -523,7 +548,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
                             started=index + 2, completed=index + 2, successful=1,
                             failed=index + 1, timed_out=0, cancelled=0))
                         self.assertEqual([command["returncode"] for command in data["commands"]], [0, 0])
-                        self.assertEqual(data["bmc"]["raw_bytes"], raw(initial_level))
+                        self.assertEqual(data["bmc"]["raw_bytes"], raw(prior_target))
                         self.assertEqual(data["sensors"]["PCH_Temp"]["observed_value"], 60)
                         self.assertIsNone(data["sensors"]["PCH_Temp"]["celsius"])
                         self.assertTrue(all(fan["rpm"] is None for fan in data["fans"].values()))
@@ -533,8 +558,8 @@ class FinalSampleFreshnessTests(unittest.TestCase):
                         self.executor.update(data)
                         self.assertEqual(self.executor.mismatches, 0)
                         self.assertTrue(self.executor.snapshot()["verified"])
-                        if index < polls - 1:
-                            self.assertEqual(self.executor.target, initial_level)
+                        floor = 3 if index + 1 >= 5 or self.now - 100 >= 300 else 1
+                        self.assertEqual(self.executor.target, max(initial_level, floor))
                     self.assertIn(reason, data["read_failure"]["trigger_reasons"])
                     self.assertEqual(self.executor.target, max(initial_level, 3))
                     self.assertEqual([call.args[0] for call in self.ipmi.set_level.call_args_list],
@@ -546,7 +571,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         for at in (115, 130, 145, 160):
             self.executor.update(self.poll(at, rpm_level=2))
         # The provisional low sample at 175 would complete the 60-second timer.
-        data = self.poll(175, rpm_level=2, delay=31)
+        data = self.poll(175, rpm_level=2, delay=self.config["safety"]["sensor_timeout_seconds"] + 1)
         self.executor.update(data)
         self.assertEqual(data["recommended_level"], 2)
         self.assertEqual(data["recovery"]["healthy_samples"], 0)
@@ -555,7 +580,9 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         self.assertEqual(self.engine.previous, {})
         self.assertEqual(self.engine.safety.last_valid_sample_at, 160)
         self.assertEqual(self.executor.confirmations, 1)
-        for count, at in enumerate((221, 236, 251, 266, 281), 1):
+        recovery_start = self.now + self.config["controller"]["poll_interval_seconds"]
+        for count in range(1, 6):
+            at = recovery_start + (count - 1) * self.config["controller"]["poll_interval_seconds"]
             data = self.poll(at, rpm_level=2)
             self.executor.update(data)
             self.assertEqual(data["recovery"]["healthy_samples"], count)
@@ -567,7 +594,8 @@ class FinalSampleFreshnessTests(unittest.TestCase):
         self.poll(100)
         self.executor.request(1)
         for index in range(2):
-            data = self.poll(self.now + 15, temperature=80, delay=31)
+            data = self.poll(self.now + 15, temperature=80,
+                             delay=self.config["safety"]["sensor_timeout_seconds"] + 1)
             self.executor.update(data)
             self.assertEqual(data["recommended_level"], 5)
             self.assertEqual(data["read_failure"]["consecutive_failures"], index + 1)
@@ -580,7 +608,7 @@ class FinalSampleFreshnessTests(unittest.TestCase):
     def test_expired_temperature_does_not_hide_independent_positive_readback_mismatch(self):
         self.poll(100)
         self.executor.request(2)
-        data = self.poll(115, delay=31, raw_level=1)
+        data = self.poll(115, delay=self.config["safety"]["sensor_timeout_seconds"] + 1, raw_level=1)
         self.assertFalse(data["collection"]["sensor_data_valid"])
         self.assertEqual(data["bmc"]["raw_bytes"], raw(1))
         with self.assertRaises(ExternalOverride):
@@ -805,6 +833,7 @@ class WizardTests(unittest.TestCase):
 
     def test_post_write_readback_mismatch_is_not_hidden_by_failed_sensor_read(self):
         now = [1.0]
+        config = load_config()
         ipmi = Mock()
         ipmi.set_level.return_value = success()
         executor = Executor(ipmi, None, Mock(), lambda *_: None, threading.Event(), lambda: now[0])
@@ -820,11 +849,11 @@ class WizardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "calibration.json"
             with self.assertRaises(ExternalOverride):
-                run_calibration(executor, IDENTITY, load_config(), path, collect_next, wait,
+                run_calibration(executor, IDENTITY, config, path, collect_next, wait,
                                 lambda *_: None, clock=lambda: now[0])
             self.assertFalse(path.exists())
         ipmi.set_level.assert_called_once_with(5)
-        self.assertLess(now[0], 20)
+        self.assertEqual(now[0], 1 + config["controller"]["poll_interval_seconds"])
 
     def test_live_high_to_low_calibration_publishes_only_new_stable_samples(self):
         now = [1.0]

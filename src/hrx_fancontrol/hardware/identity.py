@@ -13,10 +13,10 @@ def validate_control_config(config):
         raise ValueError("Control requires BMC readback")
     if config["ipmi"]["command_timeout_seconds"] > 20 or config["ipmi"]["status_timeout_seconds"] > 3:
         raise ValueError("Control requires sensor/status timeouts <= 20/3 seconds")
-    if not 5 <= config["controller"]["poll_interval_seconds"] <= 15:
-        raise ValueError("Control requires a polling interval between 5 and 15 seconds")
-    if config["safety"]["sensor_timeout_seconds"] > 30:
-        raise ValueError("Control requires sensor freshness <= 30 seconds")
+    if not 5 <= config["controller"]["poll_interval_seconds"] <= 30:
+        raise ValueError("Control requires a polling interval between 5 and 30 seconds")
+    if config["safety"]["sensor_timeout_seconds"] > 60:
+        raise ValueError("Control requires sensor freshness <= 60 seconds")
 
 
 def machine_identity(ipmi, dmi_dir=Path("/sys/class/dmi/id")):

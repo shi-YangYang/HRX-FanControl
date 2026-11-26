@@ -258,15 +258,16 @@ class ReadFailurePolicyTest(unittest.TestCase):
     def test_stale_sample_never_refreshes_last_valid_or_uses_rpm(self):
         self.warm()
         readings, _ = parse_sensors(SAMPLE)
-        report = self.engine.update(readings, 100, 60)
+        expired_at = 60 + self.config["safety"]["sensor_timeout_seconds"] + 1
+        report = self.engine.update(readings, expired_at, 60)
         self.assertEqual(report["recommended_level"], 1)
         self.assertEqual(report["read_failure"]["consecutive_failures"], 1)
-        self.assertEqual(report["read_failure"]["no_valid_sample_seconds"], 40)
+        self.assertEqual(report["read_failure"]["no_valid_sample_seconds"], expired_at - 60)
         self.assertIsNone(report["sensors"]["PCH_Temp"]["celsius"])
         self.assertTrue(all(fan["rpm"] is None for fan in report["fans"].values()))
         # A curved sensor's BMC alarm remains visible without overriding the curve.
         readings["pch_temp"] = replace(readings["pch_temp"], value=61, upper_warning=60)
-        report = self.engine.update(readings, 110, 110)
+        report = self.engine.update(readings, expired_at + 10, expired_at + 10)
         self.assertEqual(report["recommended_level"], 1)
         self.assertEqual(report["safety_state"], "recovery")
         self.assertEqual(report["bmc_alarms"], ["PCH_Temp: BMC threshold alarm"])
@@ -334,17 +335,18 @@ class ReadFailurePolicyTest(unittest.TestCase):
         self.assertEqual(failed["recovery"]["healthy_samples"], 0)
         self.poll(135)
         self.poll(150)
-        self.assertEqual(self.poll(181)["recovery"]["healthy_samples"], 1)
-        for count, now in enumerate((196, 211, 226), 2):
+        after_gap = 150 + self.config["safety"]["sensor_timeout_seconds"] + 1
+        self.assertEqual(self.poll(after_gap)["recovery"]["healthy_samples"], 1)
+        for count, now in enumerate((after_gap + 15, after_gap + 30, after_gap + 45), 2):
             report = self.poll(now)
             self.assertEqual(report["recommended_level"], 3)
             self.assertEqual(report["recovery"]["healthy_samples"], count)
         stop = threading.Event()
         with self.assertRaises(CollectionCancelled):
-            self.poll(235, status="cancel", stop=stop)
+            self.poll(after_gap + 54, status="cancel", stop=stop)
         self.assertEqual(self.engine.safety.recovery_status()["healthy_samples"], 4)
-        self.assertEqual(self.engine.last_update, 226)
-        report = self.poll(241)
+        self.assertEqual(self.engine.last_update, after_gap + 45)
+        report = self.poll(after_gap + 60)
         self.assertEqual(report["recommended_level"], 1)
         self.assertFalse(report["recovery"]["holding"])
 

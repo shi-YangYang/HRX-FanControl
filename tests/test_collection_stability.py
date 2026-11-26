@@ -287,9 +287,9 @@ class CollectionStabilityTest(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual([report["poll_id"] for report in reports], [1, 2, 3, 4, 5])
         self.assertEqual(len({report["run_id"] for report in reports}), 1)
-        self.assertEqual(waits[0], 15)
+        self.assertEqual(waits[0], 30)
         for delay in waits[1:]:
-            self.assertAlmostEqual(delay, 7.9)
+            self.assertAlmostEqual(delay, 22.9)
         persisted = [record for record in records if record["event"] in ("transition", "summary")]
         self.assertLess(len(persisted), len(reports))
         self.assertEqual(records[-1]["sampling"]["counts"], dict(started=5, completed=5, successful=4,

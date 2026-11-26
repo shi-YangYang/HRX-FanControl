@@ -290,7 +290,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_external_override_suspends_but_explicit_manual_can_resume(self):
         self.controller.tick(self.queue)
-        self.now += 15
+        self.now += self.config["controller"]["poll_interval_seconds"]
         self.collect.return_value = report(2, self.now, recommended=5)
         self.controller.tick(self.queue)
         self.assertEqual(self.controller.state.data["mode"], "suspended")

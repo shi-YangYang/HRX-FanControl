@@ -70,4 +70,4 @@ python3 scripts/build_deb.py
 
 仓库需关闭 **immutable releases**，因为附件在发布后才生成。构建失败时查看 Actions 日志；需要改代码时发布新版本。相同源码的失败任务可以重跑，旧标签的重跑仍使用旧提交中的脚本；内容相同的已有附件会跳过，内容不同则拒绝覆盖。
 
-[Linux CI](../.github/workflows/ci.yml) 在 Ubuntu 24.04 使用 Python 3.9 / 3.12 检查安装、单元测试和离线回放。安装生命周期检查运行于临时 runner，以测试进程替代硬件服务，覆盖首装、运行/停止及启用/禁用四种升级状态、卸载与配置保留。[Release 工作流](../.github/workflows/release.yml) 复用构建和安装检查；这些检查不访问 IPMI，不代表实机控制验证。
+[Linux CI](../.github/workflows/ci.yml) 在 Ubuntu 24.04 使用 Python 3.12 检查安装、单元测试和离线回放。安装生命周期检查运行于临时 runner，以测试进程替代硬件服务，覆盖首装、运行/停止及启用/禁用四种升级状态、卸载与配置保留。[Release 工作流](../.github/workflows/release.yml) 复用构建和安装检查；这些检查不访问 IPMI，不代表实机控制验证。
