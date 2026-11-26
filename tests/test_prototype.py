@@ -40,9 +40,10 @@ class ProfileTest(unittest.TestCase):
             "fan: {levels: [15, 25, 35, 45, 100]}", "fan: {installed: [FAN1, fan1]}",
             "sensors: {PCH_Temp: {curve: unknown}}", "controller: {}\ncontroller: {}",
             "sensors: {PCH_Temp: {minimum: 200}}", "[]", "",
-            "ipmi: {command_timeout_seconds: 30}", "ipmi: {status_timeout_seconds: 30}",
+            "safety: {sensor_timeout_seconds: 30}",
+            "ipmi: {command_timeout_seconds: 60}", "ipmi: {status_timeout_seconds: 60}",
             "ipmi: {status_timeout_seconds: .nan}", "ipmi: {status_timeout_seconds: true}",
-            "ipmi: {status_timeout_seconds: 0}", "ipmi: {status_timeout_seconds: 10}",
+            "ipmi: {status_timeout_seconds: 0}", "ipmi: {status_timeout_seconds: 40}",
             "ipmi: {sensor_cache_enabled: 'false'}", "ipmi: {sensor_cache_enabled: 1}",
             "safety: {read_failure_count: 0}", "safety: {read_failure_count: true}",
             "safety: {read_failure_count: 1.5}", "safety: {read_failure_timeout_seconds: 0}",
@@ -67,11 +68,11 @@ class ProfileTest(unittest.TestCase):
 
     def test_collection_defaults_and_existing_observe_profile(self):
         for c in (load_config(), self.profile("ipmi:\n  command_timeout_seconds: 20\n")):
-            self.assertEqual(c["controller"]["poll_interval_seconds"], 15)
+            self.assertEqual(c["controller"]["poll_interval_seconds"], 30)
             self.assertEqual(c["ipmi"]["command_timeout_seconds"], 20)
             self.assertEqual(c["ipmi"]["status_timeout_seconds"], 3)
             self.assertTrue(c["ipmi"]["sensor_cache_enabled"])
-            self.assertEqual(c["safety"]["sensor_timeout_seconds"], 30)
+            self.assertEqual(c["safety"]["sensor_timeout_seconds"], 60)
             self.assertEqual(c["safety"]["recovery_success_count"], 5)
             self.assertNotIn("startup_level", c["safety"])
             self.assertNotIn("recovery_delay_seconds", c["safety"])
@@ -255,17 +256,18 @@ class EngineTest(unittest.TestCase):
     def test_invalid_tables_cannot_create_fan_fault_demand(self):
         low, _ = parse_sensors(SAMPLE)
         stopped = {**low, "fan1_r_speed": replace(low["fan1_r_speed"], value=0)}
+        expired_at = self.config["safety"]["sensor_timeout_seconds"] + 1
         for failure in ("read-failed", "already-stale", "expires-before-commit"):
             with self.subTest(failure=failure):
                 engine = ThermalEngine(self.config)
                 if failure == "read-failed":
                     report = engine.update(stopped, 0, 0, read_failed=True)
                 elif failure == "already-stale":
-                    report = engine.update(stopped, 31, 0)
+                    report = engine.update(stopped, expired_at, 0)
                 else:
                     pending = engine.assess(stopped, 0, 0)
                     self.assertEqual(pending.report["recommended_level"], 3)
-                    report = engine.finalize(pending, 31)
+                    report = engine.finalize(pending, expired_at)
                 self.assertIsNone(report["recommended_level"])
                 self.assertEqual(report["safety_state"], "waiting-for-sample")
                 self.assertEqual(report["read_failure"]["consecutive_failures"], 1)
@@ -290,15 +292,40 @@ class EngineTest(unittest.TestCase):
 
     def test_stale_data_and_gaps_are_not_cooldown_evidence(self):
         self.healthy()
-        report = self.update(100, sampled_at=60)
+        expired_at = 60 + self.config["safety"]["sensor_timeout_seconds"] + 1
+        report = self.update(expired_at, sampled_at=60)
         self.assertEqual(report["recommended_level"], 3)
         self.assertEqual(report["safety_state"], "read-failure-hold")
         self.assertIsNone(report["sensors"]["PCH_Temp"]["celsius"])
         self.readings["pch_temp"] = replace(self.readings["pch_temp"], value=50)
-        self.update(110)
-        report = self.update(180)
+        self.update(expired_at + 10)
+        report = self.update(expired_at + 10 + self.config["safety"]["sensor_timeout_seconds"] + 1)
         self.assertEqual(report["sensors"]["PCH_Temp"]["requested_level"], 3)
         self.assertEqual(report["safety_state"], "recovery")
+
+    def test_default_cadence_and_read_latency_allow_downshift_and_five_sample_recovery(self):
+        low, _ = parse_sensors(SAMPLE)
+        hot = {**low, "pch_temp": replace(low["pch_temp"], value=65)}
+        stopped = {**low, "fan1_r_speed": replace(low["fan1_r_speed"], value=0)}
+        interval = self.config["controller"]["poll_interval_seconds"]
+        self.assertEqual(interval, 30)
+        for latency in (0, 1):
+            with self.subTest(latency=latency):
+                engine = ThermalEngine(self.config)
+                self.assertEqual(engine.update(hot, 0, 0)["recommended_level"], 2)
+                # Alternating read durations produce 29/31-second observation gaps.
+                for index, expected in enumerate((2, 2, 1), 1):
+                    at = index * interval
+                    report = engine.update(low, at + latency * (index % 2), at)
+                    self.assertEqual(report["recommended_level"], expected)
+                    self.assertEqual(report["safety_state"], "normal")
+                self.assertEqual(engine.update(stopped, 4 * interval, 4 * interval)["recommended_level"], 3)
+                for count in range(1, 6):
+                    at = (4 + count) * interval
+                    report = engine.update(low, at + latency * (count % 2), at)
+                    self.assertEqual(report["recovery"]["healthy_samples"], count)
+                    self.assertEqual(report["recommended_level"], 3 if count < 5 else 1)
+                self.assertFalse(report["recovery"]["holding"])
 
     def test_uncurved_emergency_and_curved_bmc_alarms(self):
         self.healthy()
